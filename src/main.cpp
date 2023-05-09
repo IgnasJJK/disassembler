@@ -61,6 +61,7 @@ enum RMField
     BP,    // | DH | SI | BP + (disp) // NOTE: (If MOD == 110, then DISP is direct address)
     BX,    // | BH | DI | BX + (disp)
 };
+#define RM_DIRECT_ADDRESS 0b110
 
 struct OperandByte
 {
@@ -110,6 +111,13 @@ i16 ParseDisplacement(FILE* file, u8 byteCount)
     return Result;
 }
 
+void PrintAddressOperand(char* effectiveAddress, i8 displacement)
+{
+    printf("[%s %s %d]", effectiveAddress, 
+        (displacement >= 0 ? "+" : "-"), 
+        (displacement < 0 ? -displacement : displacement));
+}
+
 void PrintAddressOperand(char* effectiveAddress, i16 displacement)
 {
     printf("[%s %s %d]", effectiveAddress, 
@@ -147,8 +155,8 @@ int main(int argc, char** argv)
                     OperandByte operand = ParseOperandByte(fgetc(file));
 
                     // Print operation type
-                    u8 opType = (byte1 & OP_MASK) >> 3;
-                    printf("%s ", subOpType[opType]);
+                    u8 operation = (byte1 & OP_MASK) >> 3;
+                    printf("%s ", subOpType[operation]);
 
                     char** regNames = (char**)(wideBit ? registers16 : registers8);
 
@@ -158,7 +166,7 @@ int main(int argc, char** argv)
                     }
                     else if (operand.mod == MEMORY_0BIT_MODE)
                     {
-                        if (operand.rm == 0b110)
+                        if (operand.rm == RM_DIRECT_ADDRESS)
                         {
                             i16 displacement = (i16)LoadValue16(file);
                             PrintOperands(directionBit, "%s", "[%d]", regNames[operand.reg], displacement);
@@ -183,7 +191,24 @@ int main(int argc, char** argv)
                         }
                     }
                 }
-                else if ((byte1 & 0b11111100) == 0b10000000) 
+                else if ((byte1 & 0b11000100) == 0b00000100) // Immediate to accumulator
+                {
+                    u8 operation = ((byte1 & OP_MASK) >> 3);
+                    printf("%s ", subOpType[operation]);
+
+                    bool wideBit = (byte1 & 0b1);
+                    if (wideBit)
+                    {
+                        i16 value = (i16)LoadValue16(file);
+                        printf("ax, %d", value);
+                    }
+                    else
+                    {
+                        i8 value = (i8)fgetc(file);
+                        printf("al, %d", value);
+                    }
+                }
+                else if ((byte1 & 0b11111100) == 0b10000000) // Immediate to register/memory
                 {
                     // ADD Immediate to register/memory: 100000sw [mod 000 r/m] [DISP-LO] [DISP-HI] [data] [data if s:w = 01]
                     // CMP Immediate with register/memory: 100000sw [mod 111 r/m] [DISP-LO] [DISP-HI] [data] [data if s:w = 01]
@@ -222,8 +247,9 @@ int main(int argc, char** argv)
                     }
                     else if (operand.mod == MEMORY_0BIT_MODE)
                     {
-                        // immediate to memory
-                        if (operand.rm == 0b110)
+                        printf((wideBit ? "word " : "byte "));
+
+                        if (operand.rm == RM_DIRECT_ADDRESS)
                         {
                             i16 displacement = (i16)LoadValue16(file);
                             printf("[%d], ", displacement);
@@ -233,15 +259,15 @@ int main(int argc, char** argv)
                             printf("[%s], ", effectiveAddress[operand.rm]);
                         }
 
-                        if (wideBit)
+                        if (wideBit && !signBit)
                         {
                             u16 value = LoadValue16(file);
-                            printf("word %d", value);
+                            printf("%d", value);
                         }
                         else
                         {
                             u8 value = (u8)fgetc(file);
-                            printf("byte %d", value);
+                            printf("%d", value);
                         }
                     }
                     else
@@ -264,20 +290,6 @@ int main(int argc, char** argv)
                         }
                     }
                 }
-                /*else if ((byte1 & 0b11111100) == ARITHMETIC_IMM)
-                {
-                    bool signBit = ((byte1 & 0b10) >> 1);
-                    bool wideBit = (byte1 & 0b1);
-
-                    u8 modByte = (u8)fgetc(file);
-                    u8 mod = ((modByte >> 6) & 0b11);
-                    u8 subOpcode = ((modByte >> 3) & 0b111);
-                    u8 regm = (modByte & 0b111);
-
-                    printf("%s TODO", subOpType[subOpcode]);
-
-                    // TODO: Parse operands
-                }*/
                 else if ((byte1 & 0b11111110) == MOV_IMM_MEM)
                 {
                     printf("mov ");
@@ -289,7 +301,7 @@ int main(int argc, char** argv)
 
                     // NOTE: mod represents the number of displacement bytes. Since this is immediate to 
                     // memory, mod=0b11 does not occur.
-                    if (mod == 0b00)
+                    if (mod == MEMORY_0BIT_MODE)
                     {
                         if (regm == 0b110)
                         {
@@ -331,49 +343,55 @@ int main(int argc, char** argv)
 
                     u8 byte2 = (u8) fgetc(file);
 
-                    u8 mod = ((byte2 >> 6) & 0b11);
-                    u8 reg = ((byte2 >> 3) & 0b111);
-                    u8 regm = (byte2 & 0b111);
+                    OperandByte operand = ParseOperandByte(byte2);
 
                     char** regNames = (char**)(wide ? registers16 : registers8);
 
                     // TODO: Reorganize around operand order
 
-                    if (mod == 0b11) // Register-register
+                    if (operand.mod == REGISTER_MODE) // Register-register
                     {
-                        if (direction)
-                        {
-                            printf("%s, %s", regNames[reg], regNames[regm]);
-                        }
-                        else
-                        {
-                            printf("%s, %s", regNames[regm], regNames[reg]);
-                        }
+                        PrintOperands(direction, "%s", "%s", regNames[operand.reg], regNames[operand.rm]);
                     }
-                    else if (mod == 0b00)
+                    else if (operand.mod == MEMORY_0BIT_MODE)
                     {
-                        if (regm == 0b110)
+                        if (operand.rm == 0b110)
                         {
                             i16 displacement = (i16)LoadValue16(file);
-                            PrintOperands(direction, "%s", "[%d]", regNames[reg], displacement);
+                            PrintOperands(direction, "%s", "[%d]", regNames[operand.reg], displacement);
                         }
                         else
                         {
-                            PrintOperands(direction, "%s", "[%s]", regNames[reg], effectiveAddress[regm]);
+                            PrintOperands(direction, "%s", "[%s]", regNames[operand.reg], effectiveAddress[operand.rm]);
                         }
                     }
-                    else
+                    else if (operand.mod == MEMORY_8BIT_MODE)
                     {
-                        i16 displacement = ParseDisplacement(file, mod);
+                        i8 displacement = ParseDisplacement(file, operand.mod);
                         if (direction)
                         {
-                            printf("%s, ", regNames[reg]);
-                            PrintAddressOperand(effectiveAddress[regm], displacement);
+                            printf("%s, ", regNames[operand.reg]);
+                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
                         }
                         else
                         {
-                            PrintAddressOperand(effectiveAddress[regm], displacement);
-                            printf(", %s", regNames[reg]);
+                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
+                            printf(", %s", regNames[operand.reg]);
+                        }
+                    }
+                    else // MEMORY_16BIT_MODE
+                    {
+
+                        i16 displacement = ParseDisplacement(file, operand.mod);
+                        if (direction)
+                        {
+                            printf("%s, ", regNames[operand.reg]);
+                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
+                        }
+                        else
+                        {
+                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
+                            printf(", %s", regNames[operand.reg]);
                         }
                     }
                 }
@@ -406,14 +424,26 @@ int main(int argc, char** argv)
 
                     if (wide)
                     {
-                        u16 value = LoadValue16(file);
+                        i16 value = (i16)LoadValue16(file);
                         printf("%s, %d", registers16[reg], value);
                     }
                     else
                     {
-                        u8 value = (u8)fgetc(file);
+                        i8 value = (i8)fgetc(file);
                         printf("%s, %d", registers8[reg], value);
                     }
+                }
+                else if ((byte1 & 0b11110000) == 0b01110000)
+                {
+                    // TODO: Jump labels
+
+                    char* jumpOpNames[] = {"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jg"};
+                    u8 jumpType = (byte1 & 0b1111);
+                    printf("%s ", jumpOpNames[jumpType]);
+
+                    i8 displacement = (i8)fgetc(file);
+
+                    printf("%d", displacement);
                 }
                 else
                 {
