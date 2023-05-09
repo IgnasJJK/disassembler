@@ -131,7 +131,7 @@ int main(int argc, char** argv)
     char* registers16[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
     char* effectiveAddress[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
 
-    char* subOpType[] = {"add", "or", "adc", "sbb", "and", "sub", "UNKNOWN-OP", "cmp"};
+    char* subOpType[] = {"add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"};
 
     if (argc == 2)
     {
@@ -313,7 +313,12 @@ int main(int argc, char** argv)
 
                     // NOTE: mod represents the number of displacement bytes. Since this is immediate to 
                     // memory, mod=0b11 does not occur.
-                    if (mod == MEMORY_0BIT_MODE)
+                    if (mod == REGISTER_MODE)
+                    {
+                        printf("; invalid op\n");
+                        continue;
+                    }
+                    else if (mod == MEMORY_0BIT_MODE)
                     {
                         if (regm == 0b110)
                         {
