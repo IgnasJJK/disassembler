@@ -274,18 +274,30 @@ int main(int argc, char** argv)
                     {
                         // immediate to memory with displacement
                         i16 displacement = ParseDisplacement(file, operand.mod);
-                        if (wideBit && !signBit)
+                        if (wideBit)
                         {
-                            printf("byte ");
+                            printf("word ");
                             PrintAddressOperand(effectiveAddress[operand.rm], displacement);
-                            u16 value = LoadValue16(file);
+
+                            i16 value = 0;
+                            if (signBit)
+                            {
+                                i8* valuePtr = (i8*)(&value);
+                                *(valuePtr) = (i8)fgetc(file);
+
+                                if ((value >> 7) == 0b1)
+                                {
+                                    *(valuePtr + 1) = 0b11111111;
+                                }
+                            }
+                            else value = LoadValue16(file);
                             printf(", %d", value);
                         }
                         else
                         {
-                            printf("word ");
+                            printf("byte ");
                             PrintAddressOperand(effectiveAddress[operand.rm], displacement);
-                            u8 value = (u8)fgetc(file);
+                            i8 value = (i8)fgetc(file);
                             printf(", %d",  value);
                         }
                     }
@@ -439,15 +451,45 @@ int main(int argc, char** argv)
 
                     char* jumpOpNames[] = {"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jg"};
                     u8 jumpType = (byte1 & 0b1111);
-                    printf("%s ", jumpOpNames[jumpType]);
+                    i8 displacement = (i8)fgetc(file) + 2;
 
-                    i8 displacement = (i8)fgetc(file);
+                    printf(jumpOpNames[jumpType]);
 
-                    printf("%d", displacement);
+                    if (displacement >= 0)
+                    {
+                        printf(" $+%d", displacement);
+                    }
+                    else
+                    {
+                        printf(" $%d", displacement);
+                    }
+                }
+                else if ((byte1 & 0b11111100) == 0b11100000)
+                {
+                    u8 loopType = (byte1 & 0b1111);
+                    i8 displacement = (i8)fgetc(file) + 2;
+
+                    if      (loopType == 0b00) printf("loopnz");
+                    else if (loopType == 0b01) printf("loopz");
+                    else if (loopType == 0b10) printf("loop");
+                    else if (loopType == 0b11) printf("jcxz");
+                    else
+                    {
+                        printf("UNKNOWN_OP_LOOPS");
+                    }
+
+                    if (displacement >= 0)
+                    {
+                        printf(" $+%d", displacement);
+                    }
+                    else
+                    {
+                        printf(" $%d", displacement);
+                    }
                 }
                 else
                 {
-                    printf("%x ", byte1);
+                    printf("%x", byte1);
                 }
                 printf("\n");
             }
