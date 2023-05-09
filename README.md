@@ -18,5 +18,6 @@ Afterwards, it will assemble the disassembled code and compare the binaries.
 
 ## Sources
 
-- [Computer Enhance!](https://computerenhance.com)
+- [Computer, Enhance!](https://computerenhance.com)
+- [Computer, Enhance! Repository](https://github.com/cmuratori/computer_enhance)
 - Intel. _The 8086 Family User's Manual_. 1979.
