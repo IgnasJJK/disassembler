@@ -3,3 +3,4 @@ temp/
 tests/*
 
 .vscode/
+*.rdbg
