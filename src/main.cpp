@@ -52,16 +52,19 @@ enum RMField
 
     // NOTE: (disp) is omitted when mod = 00
 
-    BX_SI, // | AL | AX | BX + SI + (disp)
-    BX_DI, // | CL | CX | BX + DI + (disp)
-    BP_SI, // | DL | DX | BP + SI + (disp)
-    BP_DI, // | BL | BX | BP + DI + (disp)
-    SI,    // | AH | SP | SI + (disp)
-    DI,    // | CH | BP | DI + (disp)
-    BP,    // | DH | SI | BP + (disp) // NOTE: (If MOD == 110, then DISP is direct address)
-    BX,    // | BH | DI | BX + (disp)
+    MEM_BX_SI, // | AL | AX | BX + SI + (disp)
+    MEM_BX_DI, // | CL | CX | BX + DI + (disp)
+    MEM_BP_SI, // | DL | DX | BP + SI + (disp)
+    MEM_BP_DI, // | BL | BX | BP + DI + (disp)
+    MEM_SI,    // | AH | SP | SI + (disp)
+    MEM_DI,    // | CH | BP | DI + (disp)
+    MEM_BP,    // | DH | SI | BP + (disp) // NOTE: (If MOD == 110, then DISP is direct address)
+    MEM_BX,    // | BH | DI | BX + (disp)
+
+#define REG_AX MEM_BX_SI
+#define REG_AL MEM_BX_SI
+#define MEM_DIRECT MEM_BP
 };
-#define RM_DIRECT_ADDRESS 0b110
 
 struct OperandByte
 {
@@ -85,7 +88,11 @@ OperandByte ParseOperandByte(u8 byte)
     return result;
 }
 
-inline u16 LoadValue16(FILE* file)
+inline u8 Load8BitValue(FILE* file)
+{
+    return (u8)fgetc(file);
+}
+inline u16 Load16BitValue(FILE* file)
 {
     u16 value = 0;
     *((u8 *)(&value) + 0) = (u8)fgetc(file);
@@ -105,11 +112,41 @@ i16 ParseDisplacement(FILE* file, u8 byteCount)
     }
     else
     {
-        Result = (i16)LoadValue16(file);
+        Result = (i16)Load16BitValue(file);
     }
 
     return Result;
 }
+
+
+
+enum DisassemblyOperandType
+{
+    OP_IMMEDIATE,
+    OP_MEMORY,
+    OP_REGISTER
+};
+
+struct DisassemblyOperand
+{
+    DisassemblyOperandType type;
+    RMField regmemIndex;
+    ModField modField;
+
+    bool outputWidth;
+
+    union
+    {
+        i16 value;
+        struct
+        {
+            i8 valueLow; // NOTE: 8-bit operand is stored in low byte
+            i8 valueHigh;
+        };
+    };
+};
+
+#define global_variable static
 
 void PrintAddressOperand(char* effectiveAddress, i8 displacement)
 {
@@ -123,6 +160,76 @@ void PrintAddressOperand(char* effectiveAddress, i16 displacement)
     printf("[%s %s %d]", effectiveAddress, 
         (displacement >= 0 ? "+" : "-"), 
         (displacement < 0 ? -displacement : displacement));
+}
+
+void PrintOperand(DisassemblyOperand operand, bool wide)
+{
+    char* registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+    char* registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+    char* effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
+
+    switch (operand.type)
+    {
+        case OP_IMMEDIATE:
+        {
+            printf("%d", (wide? operand.value : operand.valueLow));
+        }
+        break;
+
+        case OP_REGISTER:
+        {
+            char** registerNames = (wide? registers16bit : registers8bit);
+            printf("%s", registerNames[operand.regmemIndex]);
+        }
+        break;
+
+        case OP_MEMORY:
+        {
+            if (operand.modField == MEMORY_0BIT_MODE)
+            {
+                if (operand.regmemIndex == MEM_DIRECT)
+                {
+                    printf("[%d]", operand.value);
+                }
+                else
+                {
+                    printf("[%s]", effectiveAddressTable[operand.regmemIndex]);
+                }
+            }
+            else if (operand.modField == MEMORY_8BIT_MODE)
+            {
+                PrintAddressOperand(registers8bit[operand.regmemIndex], operand.valueLow);
+            }
+            else if (operand.modField == MEMORY_16BIT_MODE)
+            {
+                PrintAddressOperand(registers16bit[operand.regmemIndex], operand.value);
+            }
+            else
+            {
+                printf("; error: memory operand in register mode\n");
+            }
+        }
+        break;
+    }
+}
+
+void PrintOperandsFun(DisassemblyOperand operand1, DisassemblyOperand operand2, bool wide)
+{
+    // TODO: Check if register mode ever needs to have the width output
+
+    if (operand1.outputWidth && operand1.type != OP_REGISTER)
+    {
+        printf((wide? "word " : "byte "));
+    }
+
+    PrintOperand(operand1, wide);
+    printf(", ");
+
+    if (operand2.outputWidth && operand2.type != OP_REGISTER)
+    {
+        printf((wide? "word " : "byte "));
+    }
+    PrintOperand(operand2, wide);
 }
 
 int main(int argc, char** argv)
@@ -146,16 +253,16 @@ int main(int argc, char** argv)
             int input;
             while((input = fgetc(file)) != EOF)
             {
-                u8 byte1 = (u8)input;
-                if ((byte1 & 0b11000100) == REG_RM_OP)
+                u8 opcode = (u8)input;
+                if ((opcode & 0b11000100) == REG_RM_OP)
                 {
-                    bool directionBit = ((byte1 & 0b10) >> 1);
-                    bool wideBit = (byte1 & 0b1);
+                    bool directionBit = ((opcode & 0b10) >> 1);
+                    bool wideBit = (opcode & 0b1);
 
                     OperandByte operand = ParseOperandByte(fgetc(file));
 
                     // Print operation type
-                    u8 operation = (byte1 & OP_MASK) >> 3;
+                    u8 operation = (opcode & OP_MASK) >> 3;
                     printf("%s ", subOpType[operation]);
 
                     char** regNames = (char**)(wideBit ? registers16 : registers8);
@@ -166,9 +273,9 @@ int main(int argc, char** argv)
                     }
                     else if (operand.mod == MEMORY_0BIT_MODE)
                     {
-                        if (operand.rm == RM_DIRECT_ADDRESS)
+                        if (operand.rm == MEM_DIRECT)
                         {
-                            i16 displacement = (i16)LoadValue16(file);
+                            i16 displacement = (i16)Load16BitValue(file);
                             PrintOperands(directionBit, "%s", "[%d]", regNames[operand.reg], displacement);
                         }
                         else
@@ -191,93 +298,115 @@ int main(int argc, char** argv)
                         }
                     }
                 }
-                else if ((byte1 & 0b11000100) == 0b00000100) // Immediate to accumulator
+                else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
-                    u8 operation = ((byte1 & OP_MASK) >> 3);
+                    u8 operation = ((opcode & OP_MASK) >> 3);
                     printf("%s ", subOpType[operation]);
 
-                    bool wideBit = (byte1 & 0b1);
-                    if (wideBit)
+                    bool wide = (opcode & 0b1);
+
+                    DisassemblyOperand operandDest {0};
+                    operandDest.type = OP_REGISTER;
+                    operandDest.regmemIndex = REG_AX; // Same ID as REG_AL
+
+                    DisassemblyOperand operandSrc {0};
+                    operandSrc.type = OP_IMMEDIATE;
+
+                    if (wide)
                     {
-                        i16 value = (i16)LoadValue16(file);
-                        printf("ax, %d", value);
+                        operandSrc.value = (i16)Load16BitValue(file);
                     }
                     else
                     {
-                        i8 value = (i8)fgetc(file);
-                        printf("al, %d", value);
+                        operandSrc.valueLow = (i8)Load8BitValue(file);
                     }
+
+                    PrintOperandsFun(operandDest, operandSrc, wide);
                 }
-                else if ((byte1 & 0b11111100) == 0b10000000) // Immediate to register/memory
+                else if ((opcode & 0b11111100) == 0b10000000) // Immediate to register/memory
                 {
-                    // ADD Immediate to register/memory: 100000sw [mod 000 r/m] [DISP-LO] [DISP-HI] [data] [data if s:w = 01]
-                    // CMP Immediate with register/memory: 100000sw [mod 111 r/m] [DISP-LO] [DISP-HI] [data] [data if s:w = 01]
+                    // Structure:
+                    //   1000 00sw
+                    //   [mod(2) op(3) rm(3)]
+                    //   [DISP-LO]  [DISP-HI]
+                    //   [data]     [data if s:w = 01]
                     
-                    bool signBit = ((byte1 >> 1) & 0b1);
-                    bool wideBit = (byte1 & 0b1);
+                    bool signBit = ((opcode >> 1) & 0b1);
+                    bool wideBit = (opcode & 0b1);
 
                     u8 modByte = (u8)fgetc(file);
-                    OperandByte operand = ParseOperandByte(modByte);
+                    OperandByte instructionOperand = ParseOperandByte(modByte);
 
                     char** regNames = (char**)(wideBit ? registers16 : registers8);
 
                     // NOTE: For immediate instructions, the REG part of the operand byte determines the operation type.
-                    printf("%s ", subOpType[operand.reg]);
+                    printf("%s ", subOpType[instructionOperand.reg]);
+
+                    DisassemblyOperand operandSrc {0};
+                    operandSrc.type = OP_IMMEDIATE;
+
+                    DisassemblyOperand operandDest {0};
+                    operandDest.regmemIndex = instructionOperand.rm;
+                    operandDest.outputWidth = true;
                     
-                    if (operand.mod == REGISTER_MODE)
+                    if (instructionOperand.mod == REGISTER_MODE)
                     {
+                        operandDest.type = OP_REGISTER;
+
                         if (signBit)
                         {
-                            i8 value = (i8)fgetc(file);
-                            printf("%s, %d", regNames[operand.rm], value);
+                            operandSrc.valueLow = (i8)Load8BitValue(file);
+                            if ((operandSrc.valueLow >> 7) & 0b1)
+                            {
+                                operandSrc.valueHigh = 0b11111111;
+                            }
+                        }
+                        else if (wideBit)
+                        {
+                            operandSrc.value = (i16)Load16BitValue(file);
                         }
                         else
                         {
-                            if (wideBit)
-                            {
-                                u16 value = LoadValue16(file);
-                                printf("%s, %d", regNames[operand.rm], value);
-                            }
-                            else
-                            {
-                                u8 value = (u8)fgetc(file);
-                                printf("%s, %d", regNames[operand.rm], value);
-                            }
+                            operandSrc.valueLow = (i8)Load8BitValue(file);
                         }
+                        PrintOperandsFun(operandDest, operandSrc, wideBit);
                     }
-                    else if (operand.mod == MEMORY_0BIT_MODE)
+                    else if (instructionOperand.mod == MEMORY_0BIT_MODE)
                     {
-                        printf((wideBit ? "word " : "byte "));
+                        operandDest.type = OP_MEMORY;
 
-                        if (operand.rm == RM_DIRECT_ADDRESS)
+                        if (instructionOperand.rm == MEM_DIRECT)
                         {
-                            i16 displacement = (i16)LoadValue16(file);
-                            printf("[%d], ", displacement);
+                            operandDest.value = (i16)Load16BitValue(file);
+                        }
+
+                        if (signBit)
+                        {
+                            operandSrc.valueLow = (i8)Load8BitValue(file);
+                            if ((operandSrc.valueLow >> 7) & 0b1)
+                            {
+                                operandSrc.valueHigh = 0b11111111;
+                            }
+                        }
+                        else if (wideBit)
+                        {
+                            operandSrc.value = (i16)Load16BitValue(file);
                         }
                         else
                         {
-                            printf("[%s], ", effectiveAddress[operand.rm]);
+                            operandSrc.valueLow = (i8)Load8BitValue(file);
                         }
 
-                        if (wideBit && !signBit)
-                        {
-                            u16 value = LoadValue16(file);
-                            printf("%d", value);
-                        }
-                        else
-                        {
-                            u8 value = (u8)fgetc(file);
-                            printf("%d", value);
-                        }
+                        PrintOperandsFun(operandDest, operandSrc, wideBit);
                     }
-                    else
+                    else // MEMORY_8BIT_MODE / MEMORY_16BIT_MODE
                     {
                         // immediate to memory with displacement
-                        i16 displacement = ParseDisplacement(file, operand.mod);
+                        i16 displacement = ParseDisplacement(file, instructionOperand.mod);
                         if (wideBit)
                         {
                             printf("word ");
-                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
+                            PrintAddressOperand(effectiveAddress[instructionOperand.rm], displacement);
 
                             i16 value = 0;
                             if (signBit)
@@ -290,73 +419,79 @@ int main(int argc, char** argv)
                                     *(valuePtr + 1) = 0b11111111;
                                 }
                             }
-                            else value = LoadValue16(file);
+                            else value = Load16BitValue(file);
                             printf(", %d", value);
                         }
                         else
                         {
                             printf("byte ");
-                            PrintAddressOperand(effectiveAddress[operand.rm], displacement);
+                            PrintAddressOperand(effectiveAddress[instructionOperand.rm], displacement);
                             i8 value = (i8)fgetc(file);
                             printf(", %d",  value);
                         }
                     }
                 }
-                else if ((byte1 & 0b11111110) == MOV_IMM_MEM)
+                else if ((opcode & 0b11111110) == MOV_IMM_MEM)
                 {
                     printf("mov ");
-                    bool wide = (byte1 & 0b01);
+                    bool wide = (opcode & 0b01);
 
-                    u8 byte2 = (u8) fgetc(file);
-                    u8 mod = ((byte2 >> 6) & 0b11);
-                    u8 regm = (byte2 & 0b111);
+                    OperandByte instOperand = ParseOperandByte((u8)fgetc(file));
 
-                    // NOTE: mod represents the number of displacement bytes. Since this is immediate to 
-                    // memory, mod=0b11 does not occur.
-                    if (mod == REGISTER_MODE)
+                    // NOTE: Other reg values are not used.
+                    Assert(instOperand.reg == 0b000);
+
+                    DisassemblyOperand operandDest {0};
+                    operandDest.type = OP_MEMORY;
+                    operandDest.regmemIndex = instOperand.rm;
+                    operandDest.modField = instOperand.mod;
+
+                    if (instOperand.mod == REGISTER_MODE)
                     {
-                        printf("; invalid op\n");
+                        // NOTE: mod represents the number of displacement bytes. Since this is immediate to 
+                        // memory, mod=0b11 should not occur.
+                        printf("; invalid op -- mov immediate-memory on register\n");
                         continue;
                     }
-                    else if (mod == MEMORY_0BIT_MODE)
+                    else if (instOperand.mod == MEMORY_0BIT_MODE)
                     {
-                        if (regm == 0b110)
+                        if (instOperand.rm == MEM_DIRECT)
                         {
-                            u16 displacement = LoadValue16(file);
-                            printf("[%d], ", displacement);
-                        }
-                        else
-                        {
-                            printf("[%s], ", effectiveAddress[regm]);
+                            operandDest.value = (i16)Load16BitValue(file);
                         }
                     }
-                    else
+                    else if (instOperand.mod == MEMORY_8BIT_MODE)
                     {
-                        i16 displacement = ParseDisplacement(file, mod);
-                        PrintAddressOperand(effectiveAddress[regm], displacement);
-                        printf(", ");
+                        operandDest.valueLow = (i8)Load8BitValue(file);
+                    }
+                    else // MEMORY_16BIT_MODE
+                    {
+                        operandDest.value = (i16)Load16BitValue(file);
                     }
 
-                    // Print the value
+                    DisassemblyOperand operandSrc {0};
+                    operandSrc.type = OP_IMMEDIATE;
+                    operandSrc.outputWidth = true;
+
                     if (wide)
                     {
-                        u16 value = LoadValue16(file);
-                        printf("word %d", value);
+                        operandSrc.value = (i16)Load16BitValue(file);
                     }
                     else
                     {
-                        u8 value = (u8)fgetc(file);
-                        printf("byte %d", value);
+                        operandSrc.valueLow = (i8)Load8BitValue(file);
                     }
+
+                    PrintOperandsFun(operandDest, operandSrc, wide);
                 }
-                else if ((byte1 & 0b11111100) == MOV_RM)
+                else if ((opcode & 0b11111100) == MOV_RM)
                 {
                     printf("mov ");
                     
                     // 1 = REG is the destination
                     // 0 = REG is the source
-                    bool direction = ((byte1 & 0b10) >> 1);
-                    bool wide = (byte1 & 0b01);
+                    bool direction = ((opcode & 0b10) >> 1);
+                    bool wide = (opcode & 0b01);
 
                     u8 byte2 = (u8) fgetc(file);
 
@@ -374,7 +509,7 @@ int main(int argc, char** argv)
                     {
                         if (operand.rm == 0b110)
                         {
-                            i16 displacement = (i16)LoadValue16(file);
+                            i16 displacement = (i16)Load16BitValue(file);
                             PrintOperands(direction, "%s", "[%d]", regNames[operand.reg], displacement);
                         }
                         else
@@ -412,16 +547,16 @@ int main(int argc, char** argv)
                         }
                     }
                 }
-                else if ((byte1 & 0b11111100) == MOV_AX_MEMORY)
+                else if ((opcode & 0b11111100) == MOV_AX_MEMORY)
                 // ANCHOR: MOV accumulator-memory
                 // - MOV, Memory to accumulator
                 // - MOV, Accumulator to memory
                 {
                     // NOTE: The direction bit here has opposite meaning to the standard one, and it's written as 2 separate commands in the manual.
-                    bool direction = ((byte1 & 0b10) >> 1);
-                    bool wide = (byte1 & 0b01);
+                    bool direction = ((opcode & 0b10) >> 1);
+                    bool wide = (opcode & 0b01);
 
-                    u16 AddressInMemory = LoadValue16(file);
+                    u16 AddressInMemory = Load16BitValue(file);
 
                     if (direction) 
                     {
@@ -432,16 +567,16 @@ int main(int argc, char** argv)
                         printf("mov ax, [%d]", AddressInMemory);
                     }
                 }
-                else if ((byte1 & 0b11110000) == MOV_IMM_REG)
+                else if ((opcode & 0b11110000) == MOV_IMM_REG)
                 {
                     printf("mov ");
 
-                    bool wide = ((byte1 & 0b00001000) >> 3);
-                    u8 reg = (byte1 & 0b111);
+                    bool wide = ((opcode & 0b00001000) >> 3);
+                    u8 reg = (opcode & 0b111);
 
                     if (wide)
                     {
-                        i16 value = (i16)LoadValue16(file);
+                        i16 value = (i16)Load16BitValue(file);
                         printf("%s, %d", registers16[reg], value);
                     }
                     else
@@ -450,12 +585,12 @@ int main(int argc, char** argv)
                         printf("%s, %d", registers8[reg], value);
                     }
                 }
-                else if ((byte1 & 0b11110000) == 0b01110000)
+                else if ((opcode & 0b11110000) == 0b01110000)
                 {
                     // TODO: Jump labels
 
                     char* jumpOpNames[] = {"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jg"};
-                    u8 jumpType = (byte1 & 0b1111);
+                    u8 jumpType = (opcode & 0b1111);
                     i8 displacement = (i8)fgetc(file) + 2;
 
                     printf(jumpOpNames[jumpType]);
@@ -469,9 +604,9 @@ int main(int argc, char** argv)
                         printf(" $%d", displacement);
                     }
                 }
-                else if ((byte1 & 0b11111100) == 0b11100000)
+                else if ((opcode & 0b11111100) == 0b11100000)
                 {
-                    u8 loopType = (byte1 & 0b1111);
+                    u8 loopType = (opcode & 0b1111);
                     i8 displacement = (i8)fgetc(file) + 2;
 
                     if      (loopType == 0b00) printf("loopnz");
@@ -492,9 +627,52 @@ int main(int argc, char** argv)
                         printf(" $%d", displacement);
                     }
                 }
+                else if ((opcode & 0b11111110) == 0b11111110)
+                {
+                    char* opNames[] = {"inc", "dec", "call", "call", "jmp", "jmp", "push", "; invalid op"};
+
+                    OperandByte instructionOperand = ParseOperandByte(fgetc(file));
+                    printf("%s ", opNames[instructionOperand.reg]);
+
+                    bool wide = (opcode & 0b1);
+
+                    DisassemblyOperand operand {0};
+                    operand.type = OP_MEMORY;
+                    operand.modField = instructionOperand.mod;
+                    operand.regmemIndex = instructionOperand.rm;
+
+
+                    if (instructionOperand.mod == REGISTER_MODE) // Register-register
+                    {
+                        operand.type = OP_REGISTER;
+                    }
+                    else if (instructionOperand.mod == MEMORY_0BIT_MODE)
+                    {
+                        if (operand.regmemIndex == MEM_DIRECT)
+                        {
+                            operand.value = (i16)Load16BitValue(file);
+                        }
+                    }
+                    else if (instructionOperand.mod == MEMORY_8BIT_MODE)
+                    {
+                        operand.valueLow = (i8)Load8BitValue(file);
+                    }
+                    else // MEMORY_16BIT_MODE
+                    {
+                        operand.value = (i16)Load16BitValue(file);
+                    }
+
+                    // STUDY: Is the "word" necessary for push-memory?
+                    // STUDY: Can it be "byte"?
+                    if (instructionOperand.reg == 0b110)
+                    {
+                        printf("word ");
+                    }
+                    PrintOperand(operand, wide);
+                }
                 else
                 {
-                    printf("%x", byte1);
+                    printf("%x", opcode);
                 }
                 printf("\n");
             }
