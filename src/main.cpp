@@ -697,6 +697,11 @@ int main(int argc, char** argv)
                     }
                     PrintOperand(operand, wide);
                 }
+                else if ((opcode & 0b11111100) == 0b10011100)
+                {
+                    char* opNames[] = {"pushf", "popf", "sahf", "lahf"};
+                    printf(opNames[(opcode & 0b11)]);
+                }
                 else
                 {
                     printf("; %x", opcode);
