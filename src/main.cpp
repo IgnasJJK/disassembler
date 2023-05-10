@@ -176,12 +176,13 @@ void PrintAddressOperand(char* effectiveAddress, i16 displacement)
     }
 }
 
+static char* const registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+static char* const registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+static char* const registersSegment[] = {"es", "cs", "ss", "ds"};
+static char* const effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
+
 void PrintOperand(DisassemblyOperand operand, bool wide)
 {
-    char* registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
-    char* registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
-    char* effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
-
     switch (operand.type)
     {
         case OP_IMMEDIATE:
@@ -192,7 +193,7 @@ void PrintOperand(DisassemblyOperand operand, bool wide)
 
         case OP_REGISTER:
         {
-            char** registerNames = (wide? registers16bit : registers8bit);
+            char* const* registerNames = (wide? registers16bit : registers8bit);
             printf("%s", registerNames[operand.regmemIndex]);
         }
         break;
@@ -311,6 +312,19 @@ int main(int argc, char** argv)
                             printf(", %s", regNames[operand.reg]);
                         }
                     }
+                }
+                else if ((opcode & 0b11110000) == 0b01010000) // Push/pop register
+                {
+                    bool isPop = ((opcode >> 3) & 0b1);
+                    RMField reg = (RMField)(opcode & 0b111);
+                    printf("%s %s", (isPop? "pop" : "push"), registers16bit[reg]);
+                }
+                else if ((opcode & 0b11100110) == 0b00000110) // Push/pop segment register
+                {
+                    bool isPop = (opcode & 0b1);
+                    u8 segreg = ((opcode >> 3) & 0b11);
+
+                    printf("%s %s", (isPop? "pop" : "push"), registersSegment[segreg]);
                 }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
@@ -602,6 +616,44 @@ int main(int argc, char** argv)
                         printf(" $%d", displacement);
                     }
                 }
+                else if ((opcode & 0b11111111) == 0b10001111) // pop
+                {
+                    OperandByte instOperand = ParseOperandByte(fgetc(file));
+                    Assert(instOperand.reg == 0b000); // NOTE: Other values are not used.
+                    
+                    DisassemblyOperand operand {0};
+                    operand.type = OP_MEMORY;
+                    operand.modField = instOperand.mod;
+                    operand.regmemIndex = instOperand.rm;
+
+                    printf("pop ");
+                    if (instOperand.mod != REGISTER_MODE)
+                    {
+                        printf("word ");
+                    }
+
+                    switch(instOperand.mod)
+                    {
+                        case REGISTER_MODE:
+                            operand.type = OP_REGISTER;
+                        break;
+                        case MEMORY_0BIT_MODE:
+                            if (operand.regmemIndex == MEM_DIRECT)
+                            {
+                                operand.value = (i16)Load16BitValue(file);
+                            }
+                        break;
+                        case MEMORY_8BIT_MODE: 
+                            operand.value = (i8)Load8BitValue(file);
+                        break;
+                        default:
+                        case MEMORY_16BIT_MODE:
+                            operand.value = (i16)Load16BitValue(file);
+                        break;
+                    }
+
+                    PrintOperand(operand, true);
+                }
                 else if ((opcode & 0b11111110) == 0b11111110)
                 {
                     char* opNames[] = {"inc", "dec", "call", "call", "jmp", "jmp", "push", "; invalid op"};
@@ -637,8 +689,8 @@ int main(int argc, char** argv)
                         operand.value = (i16)Load16BitValue(file);
                     }
 
-                    // STUDY: Is the "word" necessary for push-memory?
-                    // STUDY: Can it be "byte"?
+                    // NOTE: Push is always wide.
+                    // STUDY: Is this explicit "word" really necessary?
                     if (instructionOperand.reg == 0b110)
                     {
                         printf("word ");
@@ -647,7 +699,7 @@ int main(int argc, char** argv)
                 }
                 else
                 {
-                    printf("%x", opcode);
+                    printf("; %x", opcode);
                 }
                 printf("\n");
             }
