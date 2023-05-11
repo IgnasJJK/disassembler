@@ -513,6 +513,14 @@ int main(int argc, char** argv)
                     printf("inc ");
                     PrintOperand(opRegister, true);
                 }
+                else if ((opcode & MASK_INST_1BYTE_REG) == INST_DEC_REG)
+                {
+                    Disassembly_Operand opRegister {0};
+                    opRegister.InitRegister((RMField)(opcode & 0b111));
+
+                    printf("dec ");
+                    PrintOperand(opRegister, true);
+                }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
                     u8 instructionType = ((opcode >> 3) & 0b111);
@@ -616,6 +624,11 @@ int main(int argc, char** argv)
                         printf("mov ax, [%d]", AddressInMemory);
                     }
                 }
+                else if (opcode == 0b11000010) // RET - within seg adding immediate to SP
+                {
+                    i16 offset = (i16)Load16BitValue(file);
+                    printf("ret %d", offset);
+                }
                 else if ((opcode & 0b11110000) == MOV_IMM_REG)
                 {
                     printf("mov ");
@@ -706,7 +719,7 @@ int main(int argc, char** argv)
                     {
                         printf("word ");
                     }
-                    else if (instructionOperand.reg == 0b000)
+                    else if (instructionOperand.reg == 0b000 || instructionOperand.reg == 0b001) // inc/dec
                     {
                         operand.outputWidth = true;
                     }
