@@ -122,6 +122,9 @@ inline u16 Load16BitValue(FILE* file)
 
 void LoadDisplacementValue(FILE* file, Disassembly_Operand* operand)
 {
+    // TODO: This function changes the operand type for registers.
+    // Maybe it should do the same with memory operands.
+
     switch (operand->modField)
     {
         case REGISTER_MODE:
@@ -272,7 +275,7 @@ int main(int argc, char** argv)
 
                     printf("%s ", subOpType[instructionType]);
 
-                    Inst_Operand instOperand = Inst_ParseOperand(fgetc(file));
+                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     Disassembly_Operand operand1{0};
                     operand1.type = OP_REGISTER;
@@ -308,12 +311,44 @@ int main(int argc, char** argv)
 
                     printf("%s %s", (isPop? "pop" : "push"), registersSegment[segreg]);
                 }
+                else if ((opcode & 0b11111100) == (0b10000100))
+                {
+                    bool wideBit = (opcode & 0b1);
+                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+
+                    Disassembly_Operand operand1 {0};
+                    operand1.type = OP_REGISTER;
+                    operand1.regmemIndex = instOperand.reg;
+
+                    Disassembly_Operand operand2 {0};
+                    operand2.type = OP_MEMORY;
+                    operand2.modField = instOperand.mod;
+                    operand2.regmemIndex = instOperand.rm;
+
+                    LoadDisplacementValue(file, &operand2);
+
+                    printf("xchg ");
+                    PrintOperands(operand1, operand2, wideBit);
+                }
+                else if ((opcode & 0b11111000) == 0b10010000)
+                {
+                    Disassembly_Operand operandAccumulator;
+                    operandAccumulator.type = OP_REGISTER;
+                    operandAccumulator.regmemIndex = REG_AX;
+
+                    Disassembly_Operand operand;
+                    operand.type = OP_REGISTER;
+                    operand.regmemIndex = (RMField)(opcode & 0b111);
+
+                    printf("xchg ");
+                    PrintOperands(operandAccumulator, operand, true);
+                }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
-                    u8 operation = ((opcode & OP_MASK) >> 3);
-                    printf("%s ", subOpType[operation]);
-
+                    u8 instructionType = ((opcode >> 3) & 0b111);
                     bool wide = (opcode & 0b1);
+
+                    printf("%s ", subOpType[instructionType]);
 
                     Disassembly_Operand operandDest {0};
                     operandDest.type = OP_REGISTER;
@@ -385,7 +420,7 @@ int main(int argc, char** argv)
                 else if ((opcode & 0b11111110) == MOV_IMM_MEM) // MOVE immediate to register/memory
                 {
                     printf("mov ");
-                    bool wide = (opcode & 0b01);
+                    bool wideBit = (opcode & 0b01);
 
                     Inst_Operand instOperand = Inst_ParseOperand((u8)fgetc(file));
 
@@ -403,7 +438,7 @@ int main(int argc, char** argv)
                     operandSrc.type = OP_IMMEDIATE;
                     operandSrc.outputWidth = true;
 
-                    if (wide)
+                    if (wideBit)
                     {
                         operandSrc.value = (i16)Load16BitValue(file);
                     }
@@ -412,7 +447,7 @@ int main(int argc, char** argv)
                         operandSrc.valueLow = (i8)Load8BitValue(file);
                     }
 
-                    PrintOperands(operandDest, operandSrc, wide);
+                    PrintOperands(operandDest, operandSrc, wideBit);
                 }
                 else if ((opcode & 0b11111100) == MOV_RM)
                 {
