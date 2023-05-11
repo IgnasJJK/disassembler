@@ -55,7 +55,10 @@ enum RMField
     MEM_BX,    // | BH | DI | BX + (disp)
 
 #define REG_AX MEM_BX_SI
-#define REG_AL MEM_BX_SI
+#define REG_BX MEM_BP_DI
+#define REG_CX MEM_BX_DI
+#define REG_DX MEM_BP_SI
+
 #define MEM_DIRECT MEM_BP
 };
 
@@ -105,6 +108,18 @@ struct Disassembly_Operand
             i8 valueHigh;
         };
     };
+
+    inline void InitAccumulator()
+    {
+        type = OP_REGISTER;
+        regmemIndex = REG_AX;
+    }
+
+    inline void InitRegister(RMField registerIndex)
+    {
+        type = OP_REGISTER;
+        regmemIndex = registerIndex;
+    }
 };
 
 inline u8 Load8BitValue(FILE* file)
@@ -310,6 +325,42 @@ int main(int argc, char** argv)
                     u8 segreg = ((opcode >> 3) & 0b11);
 
                     printf("%s %s", (isPop? "pop" : "push"), registersSegment[segreg]);
+                }
+                else if ((opcode & 0b11110100) == 0b11100100) // IN/OUT fixed port
+                {
+                    bool variableBit = ((opcode >> 3) & 0b1);
+                    bool typeBit = ((opcode >> 1) & 0b1);
+                    bool wideBit = (opcode & 0b1);
+
+                    Disassembly_Operand acc {0};
+                    acc.InitAccumulator();
+
+                    Disassembly_Operand port {0};
+                    if (variableBit)
+                    {
+                        port.InitRegister(REG_DX);
+                    }
+                    else
+                    {
+                        port.type = OP_IMMEDIATE;
+                        port.valueLow = (i8)Load8BitValue(file);
+                    }
+
+                    // FIXME: Operands should be unsigned
+                    if (typeBit)
+                    {
+                        printf("out ");
+                        PrintOperand(port, (variableBit | wideBit));
+                        printf(", ");
+                        PrintOperand(acc, wideBit);
+                    }
+                    else
+                    {
+                        printf("in ");
+                        PrintOperand(acc, wideBit);
+                        printf(", ");
+                        PrintOperand(port, (variableBit | wideBit));
+                    }
                 }
                 else if ((opcode & 0b11111100) == (0b10000100))
                 {
