@@ -94,6 +94,7 @@ enum Disassembly_OperandType
 struct Disassembly_Operand
 {
     Disassembly_OperandType type;
+
     RMField regmemIndex;
     ModField modField;
 
@@ -108,12 +109,6 @@ struct Disassembly_Operand
             i8 valueHigh;
         };
     };
-
-    inline void InitAccumulator()
-    {
-        type = OP_REGISTER;
-        regmemIndex = REG_AX;
-    }
 
     inline void InitRegister(RMField registerIndex)
     {
@@ -135,10 +130,17 @@ inline u16 Load16BitValue(FILE* file)
     return value;
 }
 
-void LoadDisplacementValue(FILE* file, Disassembly_Operand* operand)
+/// @brief Loads memory 
+/// @param file handle to assembled file
+/// @param[out] operand output location for operand data
+void LoadMemoryOperand(FILE* file, Disassembly_Operand* operand, ModField mode, RMField regmemField)
 {
     // TODO: This function changes the operand type for registers.
     // Maybe it should do the same with memory operands.
+
+    operand->type = OP_MEMORY;
+    operand->modField = mode;
+    operand->regmemIndex = regmemField;
 
     switch (operand->modField)
     {
@@ -157,6 +159,32 @@ void LoadDisplacementValue(FILE* file, Disassembly_Operand* operand)
     }
 }
 
+/// @brief Loads immediate operand value
+/// @param file handle to assembled file
+/// @param[out] operand operand to load value into
+/// @param wideOperation if true, 2 bytes are loaded. Otherwise - 1 byte.
+/// @param signExtend if true, loads 1 byte and sign extends it to 2 bytes
+void LoadImmediateOperand(FILE* file, Disassembly_Operand* operand, bool wideOperation, bool signExtend)
+{
+    operand->type = OP_IMMEDIATE;
+
+    if (signExtend)
+    {
+        operand->valueLow = (i8)Load8BitValue(file);
+        if ((operand->valueLow >> 7) & 0b1)
+        {
+            operand->valueHigh = 0b11111111;
+        }
+    }
+    else if (wideOperation)
+    {
+        operand->value = (i16)Load16BitValue(file);
+    }
+    else
+    {
+        operand->valueLow = (i8)Load8BitValue(file);
+    }
+}
 
 #define global_variable static
 
@@ -297,16 +325,10 @@ int main(int argc, char** argv)
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     Disassembly_Operand operand1{0};
-                    operand1.type = OP_REGISTER;
-                    operand1.regmemIndex = instOperand.reg;
-                    operand1.modField = instOperand.mod;
+                    operand1.InitRegister(instOperand.reg);
 
                     Disassembly_Operand operand2{0};
-                    operand2.type = OP_MEMORY;
-                    operand2.regmemIndex = instOperand.rm;
-                    operand2.modField = instOperand.mod;
-
-                    LoadDisplacementValue(file, &operand2);
+                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
 
                     if (directionBit)
                     {
@@ -337,7 +359,7 @@ int main(int argc, char** argv)
                     bool wideBit = (opcode & 0b1);
 
                     Disassembly_Operand acc {0};
-                    acc.InitAccumulator();
+                    acc.InitRegister(REG_AX);
 
                     Disassembly_Operand port {0};
                     if (variableBit)
@@ -346,8 +368,7 @@ int main(int argc, char** argv)
                     }
                     else
                     {
-                        port.type = OP_IMMEDIATE;
-                        port.valueLow = (i8)Load8BitValue(file);
+                        LoadImmediateOperand(file, &port, false, false);
                     }
 
                     // FIXME: Operands should be unsigned
@@ -372,56 +393,39 @@ int main(int argc, char** argv)
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     Disassembly_Operand operand1 {0};
-                    operand1.type = OP_REGISTER;
-                    operand1.regmemIndex = instOperand.reg;
+                    operand1.InitRegister(instOperand.reg);
 
                     Disassembly_Operand operand2 {0};
-                    operand2.type = OP_MEMORY;
-                    operand2.modField = instOperand.mod;
-                    operand2.regmemIndex = instOperand.rm;
-
-                    LoadDisplacementValue(file, &operand2);
+                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
 
                     printf("xchg ");
                     PrintOperands(operand1, operand2, wideBit);
                 }
                 else if ((opcode & 0b11111000) == 0b10010000)
                 {
-                    Disassembly_Operand operandAccumulator;
-                    operandAccumulator.type = OP_REGISTER;
-                    operandAccumulator.regmemIndex = REG_AX;
+                    Disassembly_Operand opAccumulator {0};
+                    opAccumulator.InitRegister(REG_AX);
 
-                    Disassembly_Operand operand;
-                    operand.type = OP_REGISTER;
-                    operand.regmemIndex = (RMField)(opcode & 0b111);
+                    Disassembly_Operand opRegister {0};
+                    opRegister.InitRegister((RMField)(opcode & 0b111));
 
                     printf("xchg ");
-                    PrintOperands(operandAccumulator, operand, true);
+                    PrintOperands(opAccumulator, opRegister, true);
                 }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
                     u8 instructionType = ((opcode >> 3) & 0b111);
-                    bool wide = (opcode & 0b1);
+                    bool wideBit = (opcode & 0b1);
 
                     printf("%s ", subOpType[instructionType]);
 
                     Disassembly_Operand operandDest {0};
-                    operandDest.type = OP_REGISTER;
-                    operandDest.regmemIndex = REG_AX; // Same ID as REG_AL
+                    operandDest.InitRegister(REG_AX); // Same ID as REG_AL
 
                     Disassembly_Operand operandSrc {0};
-                    operandSrc.type = OP_IMMEDIATE;
+                    LoadImmediateOperand(file, &operandSrc, wideBit, false);
 
-                    if (wide)
-                    {
-                        operandSrc.value = (i16)Load16BitValue(file);
-                    }
-                    else
-                    {
-                        operandSrc.valueLow = (i8)Load8BitValue(file);
-                    }
-
-                    PrintOperands(operandDest, operandSrc, wide);
+                    PrintOperands(operandDest, operandSrc, wideBit);
                 }
                 else if ((opcode & 0b11111100) == 0b10000000) // Immediate to register/memory
                 {
@@ -434,42 +438,19 @@ int main(int argc, char** argv)
                     bool signBit = ((opcode >> 1) & 0b1);
                     bool wideBit = (opcode & 0b1);
 
-                    u8 modByte = (u8)fgetc(file);
-                    Inst_Operand instructionOperand = Inst_ParseOperand(modByte);
-
-                    char** regNames = (char**)(wideBit ? registers16 : registers8);
+                    Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     // NOTE: For immediate instructions, the REG part of the operand byte determines the operation type.
                     printf("%s ", subOpType[instructionOperand.reg]);
 
-                    Disassembly_Operand operandSrc {0};
-                    operandSrc.type = OP_IMMEDIATE;
-                    operandSrc.outputWidth = true;
-
                     Disassembly_Operand operandDest {0};
-                    operandDest.type = OP_MEMORY;
-                    operandDest.modField = instructionOperand.mod;
-                    operandDest.regmemIndex = instructionOperand.rm;
                     operandDest.outputWidth = true;
+                    LoadMemoryOperand(file, &operandDest, instructionOperand.mod, instructionOperand.rm);
+
+                    Disassembly_Operand operandSrc {0};
+                    operandSrc.outputWidth = true;
+                    LoadImmediateOperand(file, &operandSrc, wideBit, signBit);
                     
-                    LoadDisplacementValue(file, &operandDest);
-                    
-                    if (signBit)
-                    {
-                        operandSrc.valueLow = (i8)Load8BitValue(file);
-                        if ((operandSrc.valueLow >> 7) & 0b1)
-                        {
-                            operandSrc.valueHigh = 0b11111111;
-                        }
-                    }
-                    else if (wideBit)
-                    {
-                        operandSrc.value = (i16)Load16BitValue(file);
-                    }
-                    else
-                    {
-                        operandSrc.valueLow = (i8)Load8BitValue(file);
-                    }
                     PrintOperands(operandDest, operandSrc, wideBit);
                 }
                 else if ((opcode & 0b11111110) == MOV_IMM_MEM) // MOVE immediate to register/memory
@@ -483,24 +464,11 @@ int main(int argc, char** argv)
                     Assert(instOperand.reg == 0b000);
 
                     Disassembly_Operand operandDest {0};
-                    operandDest.type = OP_MEMORY;
-                    operandDest.regmemIndex = instOperand.rm;
-                    operandDest.modField = instOperand.mod;
-
-                    LoadDisplacementValue(file, &operandDest);
+                    LoadMemoryOperand(file, &operandDest, instOperand.mod, instOperand.rm);
 
                     Disassembly_Operand operandSrc {0};
-                    operandSrc.type = OP_IMMEDIATE;
                     operandSrc.outputWidth = true;
-
-                    if (wideBit)
-                    {
-                        operandSrc.value = (i16)Load16BitValue(file);
-                    }
-                    else
-                    {
-                        operandSrc.valueLow = (i8)Load8BitValue(file);
-                    }
+                    LoadImmediateOperand(file, &operandSrc, wideBit, false);
 
                     PrintOperands(operandDest, operandSrc, wideBit);
                 }
@@ -514,16 +482,10 @@ int main(int argc, char** argv)
                     Inst_Operand instOperand = Inst_ParseOperand(fgetc(file));
 
                     Disassembly_Operand operand1{0};
-                    operand1.type = OP_REGISTER;
-                    operand1.regmemIndex = instOperand.reg;
-                    operand1.modField = instOperand.mod;
+                    operand1.InitRegister(instOperand.reg);
 
                     Disassembly_Operand operand2{0};
-                    operand2.type = OP_MEMORY;
-                    operand2.regmemIndex = instOperand.rm;
-                    operand2.modField = instOperand.mod;
-
-                    LoadDisplacementValue(file, &operand2);
+                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
 
                     if (directionBit)
                     {
@@ -558,19 +520,15 @@ int main(int argc, char** argv)
                 {
                     printf("mov ");
 
-                    bool wide = ((opcode & 0b00001000) >> 3);
-                    u8 reg = (opcode & 0b111);
+                    bool wideBit = ((opcode & 0b00001000) >> 3);
+                    RMField reg = (RMField)(opcode & 0b111);
 
-                    if (wide)
-                    {
-                        i16 value = (i16)Load16BitValue(file);
-                        printf("%s, %d", registers16[reg], value);
-                    }
-                    else
-                    {
-                        i8 value = (i8)fgetc(file);
-                        printf("%s, %d", registers8[reg], value);
-                    }
+                    Disassembly_Operand opDest {0};
+                    opDest.InitRegister(reg);
+                    Disassembly_Operand opSrc {0};
+                    LoadImmediateOperand(file, &opSrc, wideBit, false);
+
+                    PrintOperands(opDest, opSrc, wideBit);
                 }
                 else if ((opcode & 0b11110000) == 0b01110000)
                 {
@@ -620,17 +578,14 @@ int main(int argc, char** argv)
                     Assert(instOperand.reg == 0b000); // NOTE: Other values are not used.
                     
                     Disassembly_Operand operand {0};
-                    operand.type = OP_MEMORY;
-                    operand.modField = instOperand.mod;
-                    operand.regmemIndex = instOperand.rm;
+                    LoadMemoryOperand(file, &operand, instOperand.mod, instOperand.rm);
 
                     printf("pop ");
-                    if (instOperand.mod != REGISTER_MODE)
+                    if (operand.modField != REGISTER_MODE)
                     {
                         printf("word ");
                     }
 
-                    LoadDisplacementValue(file, &operand);
                     PrintOperand(operand, true);
                 }
                 else if ((opcode & 0b11111110) == 0b11111110)
@@ -643,10 +598,7 @@ int main(int argc, char** argv)
                     bool wide = (opcode & 0b1);
 
                     Disassembly_Operand operand {0};
-                    operand.type = OP_MEMORY;
-                    operand.modField = instructionOperand.mod;
-                    operand.regmemIndex = instructionOperand.rm;
-                    LoadDisplacementValue(file, &operand);
+                    LoadMemoryOperand(file, &operand, instructionOperand.mod, instructionOperand.rm);
 
                     // NOTE: Push is always wide.
                     // STUDY: Is this explicit "word" really necessary?
