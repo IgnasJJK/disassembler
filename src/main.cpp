@@ -282,7 +282,11 @@ int main(int argc, char** argv)
             while((input = fgetc(file)) != EOF)
             {
                 u8 opcode = (u8)input;
-                if ((opcode & 0b11000100) == REG_RM_OP)
+                if (opcode == 0b11010111)
+                {
+                    printf("xlat");
+                }
+                else if ((opcode & 0b11000100) == REG_RM_OP)
                 {
                     bool directionBit = ((opcode >> 1) & 0b1);
                     bool wideBit = (opcode & 0b1);
