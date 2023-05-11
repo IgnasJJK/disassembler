@@ -223,23 +223,32 @@ static char* const effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", 
 
 void PrintOperand(Disassembly_Operand operand, bool wideOperation)
 {
+    // STUDY: Check if register mode ever needs to have the width output
+
     switch (operand.type)
     {
-        case OP_IMMEDIATE:
-        {
-            printf("%d", (wideOperation? operand.value : operand.valueLow));
-        }
-        break;
-
         case OP_REGISTER:
         {
+            // NOTE: Size of registers is implicitly known, so size specification is not needed
             char* const* registerNames = (wideOperation? registers16bit : registers8bit);
             printf("%s", registerNames[operand.regmemIndex]);
         }
         break;
-
+        case OP_IMMEDIATE:
+        {
+            if (operand.outputWidth)
+            {
+                printf(wideOperation? "word " : "byte ");
+            }
+            printf("%d", (wideOperation? operand.value : operand.valueLow));
+        }
+        break;
         case OP_MEMORY:
         {
+            if (operand.outputWidth)
+            {
+                printf(wideOperation? "word " : "byte ");
+            }
             if (operand.modField == MEMORY_0BIT_MODE)
             {
                 if (operand.regmemIndex == MEM_DIRECT)
@@ -270,19 +279,14 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
 
 void PrintOperands(Disassembly_Operand operand1, Disassembly_Operand operand2, bool wide)
 {
-    // TODO: Check if register mode ever needs to have the width output
-
-    if (operand1.outputWidth && operand1.type != OP_REGISTER)
-    {
-        printf((wide? "word " : "byte "));
-    }
-
     PrintOperand(operand1, wide);
     printf(", ");
+    PrintOperand(operand2, wide);
+}
 
 #define MASK_INST_1BYTE_REG 0b11111000
 enum Inst_1ByteRegisterInstructions
-    {
+{
     INST_INC_REG           = 0b01000000,
     INST_DEC_REG           = 0b01001000,
     INST_PUSH_REG          = 0b01010000,
@@ -315,6 +319,7 @@ int main(int argc, char** argv)
             while((input = fgetc(file)) != EOF)
             {
                 u8 opcode = (u8)input;
+
                 if (opcode == 0b11010111)
                 {
                     printf("xlat");
@@ -483,7 +488,6 @@ int main(int argc, char** argv)
                     LoadMemoryOperand(file, &operandDest, instructionOperand.mod, instructionOperand.rm);
 
                     Disassembly_Operand operandSrc {0};
-                    operandSrc.outputWidth = true;
                     LoadImmediateOperand(file, &operandSrc, wideBit, signBit);
                     
                     PrintOperands(operandDest, operandSrc, wideBit);
