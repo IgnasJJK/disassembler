@@ -280,12 +280,17 @@ void PrintOperands(Disassembly_Operand operand1, Disassembly_Operand operand2, b
     PrintOperand(operand1, wide);
     printf(", ");
 
-    if (operand2.outputWidth && operand2.type != OP_REGISTER)
+#define MASK_INST_1BYTE_REG 0b11111000
+enum Inst_1ByteRegisterInstructions
     {
-        printf((wide? "word " : "byte "));
-    }
-    PrintOperand(operand2, wide);
-}
+    INST_INC_REG           = 0b01000000,
+    INST_DEC_REG           = 0b01001000,
+    INST_PUSH_REG          = 0b01010000,
+    INST_POP_REG           = 0b01011000,
+    INST_XCHG_ACC_WITH_REG = 0b10010000,
+    INST_MOV_IMM_TO_REG    = 0b10110000,
+    INST_MOV_IMM_TO_REG_W  = 0b10111000,
+};
 
 
 int main(int argc, char** argv)
@@ -423,7 +428,7 @@ int main(int argc, char** argv)
                     printf("xchg ");
                     PrintOperands(operand1, operand2, wideBit);
                 }
-                else if ((opcode & 0b11111000) == 0b10010000)
+                else if ((opcode & MASK_INST_1BYTE_REG) == INST_XCHG_ACC_WITH_REG)
                 {
                     Disassembly_Operand opAccumulator {0};
                     opAccumulator.InitRegister(REG_AX);
@@ -433,6 +438,14 @@ int main(int argc, char** argv)
 
                     printf("xchg ");
                     PrintOperands(opAccumulator, opRegister, true);
+                }
+                else if ((opcode & MASK_INST_1BYTE_REG) == INST_INC_REG)
+                {
+                    Disassembly_Operand opRegister {0};
+                    opRegister.InitRegister((RMField)(opcode & 0b111));
+
+                    printf("inc ");
+                    PrintOperand(opRegister, true);
                 }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
@@ -614,7 +627,7 @@ int main(int argc, char** argv)
                 {
                     char* opNames[] = {"inc", "dec", "call", "call", "jmp", "jmp", "push", "; invalid op"};
 
-                    Inst_Operand instructionOperand = Inst_ParseOperand(fgetc(file));
+                    Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
                     printf("%s ", opNames[instructionOperand.reg]);
 
                     bool wide = (opcode & 0b1);
@@ -627,6 +640,10 @@ int main(int argc, char** argv)
                     if (instructionOperand.reg == 0b110)
                     {
                         printf("word ");
+                    }
+                    else if (instructionOperand.reg == 0b000)
+                    {
+                        operand.outputWidth = true;
                     }
                     PrintOperand(operand, wide);
                 }
