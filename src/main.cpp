@@ -296,6 +296,44 @@ enum Inst_1ByteRegisterInstructions
     INST_MOV_IMM_TO_REG_W  = 0b10111000,
 };
 
+enum Inst_1Byte
+{
+    INST_DAA   = 0b00100111,
+    INST_DAS   = 0b00101111,
+    INST_AAA   = 0b00110111,
+    INST_AAS   = 0b00111111,
+
+    INST_CBW   = 0b10011000,
+    INST_CWD   = 0b10011001,
+
+    INST_PUSHF = 0b10011100,
+    INST_POPF  = 0b10011101,
+    INST_SAHF  = 0b10011110,
+    INST_LAHF  = 0b10011111,
+
+    INST_XLAT  = 0b11010111,
+
+    INST_INT3  = 0b11001100, // Interrupt 3
+    INST_INTO  = 0b11001110, // Interrupt on overflow
+    INST_IRET  = 0b11001111, // Interrupt return
+
+    INST_CLC   = 0b11111000, // Clear carry
+    INST_CMC   = 0b11110101, // Complement carry
+    INST_STC   = 0b11111001, // Set carry
+    INST_CLD   = 0b11111100, // Clear direction
+    INST_STD   = 0b11111101, // Set direction
+    INST_CLI   = 0b11111010, // Clear interrupt
+    INST_STI   = 0b11111011, // Set interrupt
+    INST_HLT   = 0b11110100, // Halt
+    INST_WAIT  = 0b10011011, // Wait
+    INST_LOCK  = 0b11110000, // Bus lock prefix
+
+
+    // TODO: Find instruction names and definitions
+    INST_RET_WITHIN_SEGMENT   = 0b11000011,
+    INST_RET_INTERSEGMENT  = 0b11001011,
+};
+
 
 int main(int argc, char** argv)
 {
@@ -320,10 +358,33 @@ int main(int argc, char** argv)
             {
                 u8 opcode = (u8)input;
 
-                if (opcode == 0b11010111)
+                if (opcode == INST_XLAT) printf("xlat");
+                else if (opcode == INST_DAA) printf("daa");
+                else if (opcode == INST_AAA) printf("aaa");
+                else if (opcode == INST_AAS) printf("aas");
+                else if (opcode == INST_DAS) printf("das");
+                else if (opcode == INST_CBW) printf("cbw");
+                else if (opcode == INST_CWD) printf("cwd");
+                else if (opcode == INST_INT3) printf("int 3");
+                else if (opcode == INST_INTO) printf("into");
+                else if (opcode == INST_IRET) printf("iret");
+                else if (opcode == INST_CLC) printf("clc");
+                else if (opcode == INST_CMC) printf("cmc");
+                else if (opcode == INST_STC) printf("stc");
+                else if (opcode == INST_CLD) printf("cld");
+                else if (opcode == INST_STD) printf("std");
+                else if (opcode == INST_CLI) printf("cli");
+                else if (opcode == INST_STI) printf("sti");
+                else if (opcode == INST_HLT) printf("hlt");
+                else if (opcode == INST_WAIT) printf("wait");
+                else if (opcode == INST_LOCK)
                 {
-                    printf("xlat");
+                    printf("lock "); 
+                    continue;
                 }
+                // FIXME: Probably inaccurate ret instructions
+                else if (opcode == INST_RET_INTERSEGMENT) printf("ret ; intersegment");
+                else if (opcode == INST_RET_WITHIN_SEGMENT) printf("ret ; within segment");
                 #define INST_LEA 0b10001101
                 #define INST_LDS 0b11000101
                 #define INST_LES 0b11000100
