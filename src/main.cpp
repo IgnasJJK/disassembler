@@ -314,6 +314,28 @@ int main(int argc, char** argv)
                 {
                     printf("xlat");
                 }
+                #define INST_LEA 0b10001101
+                #define INST_LDS 0b11000101
+                #define INST_LES 0b11000100
+                else if (opcode == INST_LEA || opcode == INST_LDS || opcode == INST_LES)
+                {
+                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+
+                    Disassembly_Operand opDest {0};
+                    opDest.InitRegister(instOperand.reg);
+
+                    Disassembly_Operand opSrc {0};
+                    LoadMemoryOperand(file, &opSrc, instOperand.mod, instOperand.rm);
+
+                    if (opcode == INST_LEA)
+                        printf("lea ");
+                    else if (opcode == INST_LDS)
+                        printf("lds ");
+                    else
+                        printf("les ");
+
+                    PrintOperands(opDest, opSrc, true);
+                }
                 else if ((opcode & 0b11000100) == REG_RM_OP)
                 {
                     bool directionBit = ((opcode >> 1) & 0b1);
