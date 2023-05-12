@@ -227,6 +227,9 @@ enum Inst_1Byte
     INST_INTO  = 0b11001110, // Interrupt on overflow
     INST_IRET  = 0b11001111, // Interrupt return
 
+    INST_AAM   = 0b11010100,
+    INST_AAD   = 0b11010101,
+
     INST_CLC   = 0b11111000, // Clear carry
     INST_CMC   = 0b11110101, // Complement carry
     INST_STC   = 0b11111001, // Set carry
@@ -239,7 +242,7 @@ enum Inst_1Byte
     INST_LOCK  = 0b11110000, // Bus lock prefix
 
 
-    // TODO: Find instruction names and definitions
+    // TODO: Find definitions
     INST_RET_WITHIN_SEGMENT   = 0b11000011,
     INST_RET_INTERSEGMENT  = 0b11001011,
 
@@ -317,7 +320,9 @@ void PrintInstruction(Disassembly_Instruction* inst)
         break;
     }
 
-    if (inst->type != DIS_LOCK) printf("\n");
+    if (inst->type != DIS_LOCK && 
+        inst->type != DIS_REP)
+        printf("\n");
 }
 
 int main(int argc, char** argv)
@@ -381,14 +386,14 @@ int main(int argc, char** argv)
                 // FIXME: Probably inaccurate ret instructions
                 else if (opcode == INST_RET_INTERSEGMENT) instruction.type = DIS_RET; //printf("ret ; intersegment");
                 else if (opcode == INST_RET_WITHIN_SEGMENT) instruction.type = DIS_RET; // printf("ret ; within segment");
-                else if (opcode == 0b11010100) // AAM
+                else if (opcode == INST_AAM) // AAM
                 {
                     u8 nextByte = Load8BitValue(file);
                     // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
                     //Assert(nextByte == 0b00001010);
                     instruction.type = DIS_AAM;
                 }
-                else if (opcode == 0b11010101) // AAD
+                else if (opcode == INST_AAD) // AAD
                 {
                     u8 nextByte = Load8BitValue(file);
                     // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
@@ -411,6 +416,12 @@ int main(int argc, char** argv)
                     instruction.operand1 = InitRegisterOperand(instOperand.reg);
                     LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
+                else if ((opcode & 0b11111110) == 0b11110010) instruction.type = DIS_REP;
+                else if ((opcode & 0b11111110) == 0b10100100) instruction.type = (opcode & 0b1) ? DIS_MOVSW : DIS_MOVSB;
+                else if ((opcode & 0b11111110) == 0b10100110) instruction.type = (opcode & 0b1) ? DIS_CMPSW : DIS_CMPSB;
+                else if ((opcode & 0b11111110) == 0b10101110) instruction.type = (opcode & 0b1) ? DIS_SCASW : DIS_SCASB;
+                else if ((opcode & 0b11111110) == 0b10101100) instruction.type = (opcode & 0b1) ? DIS_LODSW : DIS_LODSB;
+                else if ((opcode & 0b11111110) == 0b10101010) instruction.type = (opcode & 0b1) ? DIS_STOSW : DIS_STOSB;
                 else if ((opcode & 0b11000100) == 0b00000000)
                 {
                     instruction.isWide = (opcode & 0b1);
@@ -567,7 +578,8 @@ int main(int argc, char** argv)
                 {
                     instruction.type = DIS_RET;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand(Load16BitValue(file));
+                    instruction.operand1 = InitImmediateOperand((i16)Load16BitValue(file));
+                    instruction.operand1.outputWidth = false;
                 }
                 else if ((opcode & 0b11110000) == 0b10110000) // MOV imm -> reg
                 {

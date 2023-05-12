@@ -121,11 +121,16 @@ enum Disassembly_InstructionType
     DIS_XOR,
     // String manipulation
     DIS_REP,
-    DIS_MOVS,
-    DIS_CMPS,
-    DIS_SCAS,
-    DIS_LODS,
-    DIS_STDS,
+    DIS_MOVSB,
+    DIS_MOVSW,
+    DIS_CMPSB,
+    DIS_CMPSW,
+    DIS_SCASB,
+    DIS_SCASW,
+    DIS_LODSB,
+    DIS_LODSW,
+    DIS_STOSB,
+    DIS_STOSW,
     // Control transfer
     DIS_CALL,
     DIS_JMP,
@@ -174,10 +179,10 @@ static const char* operationNames[] = {
     "mov", "push", "pop", "xchg", "in", "out", "xlat", "lea", "lds", "les", "lahf", "sahf", "pushf", "popf",
     "add", "adc", "inc", "aaa", "daa", "sub", "sbb", "dec", "neg", "cmp", "aas", "das", "mul", "imul", "aam",
     "div", "idiv", "aad", "cbw", "cwd", "not", "shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "and", "test",
-    "or", "xor", "rep", "movs", "cmps", "scas", "lods", "stds", "call", "jmp", "ret", "je", "jl", "jle", "jb",
-    "jbe", "jp", "jo", "js", "jne", "jnl", "jnle", "jnb", "jnbe", "jnp", "jno", "jns", "loop", "loopz", "loopnz",
-    "jcxz", "int", "into", "iret", "clc", "cmc", "stc", "cld", "std", "cli", "sti", "hlt", "wait", "esc", "lock",
-    "segment", ";noop"
+    "or", "xor", "rep", "movsb", "movsw", "cmpsb", "cmpsw", "scasb", "scasw", "lodsb", "lodsw", "stosb", "stosw",
+    "call", "jmp", "ret", "je", "jl", "jle", "jb", "jbe", "jp", "jo", "js", "jne", "jnl", "jnle", "jnb", "jnbe",
+    "jnp", "jno", "jns", "loop", "loopz", "loopnz", "jcxz", "int", "into", "iret", "clc", "cmc", "stc", "cld", 
+    "std", "cli", "sti", "hlt", "wait", "esc", "lock", "segment", ";noop"
 };
 
 struct Disassembly_Instruction
