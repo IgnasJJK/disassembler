@@ -1,121 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#define Assert(expr) if (!(expr)) { *(int*)0 = 100; }
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef int8_t i8;
-typedef int16_t i16;
-
-#define OP_MASK 0b00111000 //< Mask for operator type in first byte
-
-#define MOV_RM 0b10001000
-
-#define ADD_RM 0b00000000
-#define SUB_RM 0b00101000 // 001010dw
-#define CMP_RM 0b00111000 // 001110dw
-
-#define MOV_IMM_REG 0b10110000
-#define MOV_IMM_MEM 0b11000110
-#define MOV_AX_MEMORY 0b10100000
-
-// ADD, CMP, SUB (immediate)
-#define ARITHMETIC_IMM 0b10000000 // 100000sw
-
-// Immediate to accumulator
-#define ACCUM_IMM_OP 0b00000100 // NOTE: Includes OP_MASK (00 OPC 100)
-
-// REG/MEM Operation (ADD, CMP, SUB)
-#define REG_RM_OP 0b00000000 // NOTE: Includes OP_MASK (00 OPC 000)
-
-enum ModField
-{
-    MEMORY_0BIT_MODE,
-    MEMORY_8BIT_MODE,
-    MEMORY_16BIT_MODE,
-    REGISTER_MODE
-};
-enum RMField
-{
-    // Table columns:
-    // - Register mode, 8-bit
-    // - Register mode, 16-bit (wide)
-    // - Memory mode, effective address
-
-    // NOTE: (disp) is omitted when mod = 00
-
-    MEM_BX_SI, // | AL | AX | BX + SI + (disp)
-    MEM_BX_DI, // | CL | CX | BX + DI + (disp)
-    MEM_BP_SI, // | DL | DX | BP + SI + (disp)
-    MEM_BP_DI, // | BL | BX | BP + DI + (disp)
-    MEM_SI,    // | AH | SP | SI + (disp)
-    MEM_DI,    // | CH | BP | DI + (disp)
-    MEM_BP,    // | DH | SI | BP + (disp) // NOTE: (If MOD == 110, then DISP is direct address)
-    MEM_BX,    // | BH | DI | BX + (disp)
-
-#define REG_AX MEM_BX_SI
-#define REG_BX MEM_BP_DI
-#define REG_CX MEM_BX_DI
-#define REG_DX MEM_BP_SI
-
-#define MEM_DIRECT MEM_BP
-};
-
-struct Inst_Operand
-{
-    ModField mod; // Operation mode. May correspond to the number of displacement bytes.
-    RMField reg;
-    RMField rm;
-};
-
-Inst_Operand Inst_ParseOperand(u8 byte)
-{
-    // Byte structure:
-    // - mod: (2 bit) mode 
-    // - reg: (3 bit) register
-    // - r/m: (3 bit) register/memory
-
-    Inst_Operand result;
-    result.mod = (ModField)((byte >> 6) & 0b11);
-    result.reg = (RMField)((byte >> 3) & 0b111);
-    result.rm = (RMField)(byte & 0b111);
-
-    return result;
-}
-
-enum Disassembly_OperandType
-{
-    OP_IMMEDIATE,
-    OP_MEMORY,
-    OP_REGISTER
-};
-
-struct Disassembly_Operand
-{
-    Disassembly_OperandType type;
-
-    RMField regmemIndex;
-    ModField modField;
-
-    bool outputWidth;
-
-    union
-    {
-        i16 value;
-        struct
-        {
-            i8 valueLow; // NOTE: 8-bit operand is stored in low byte
-            i8 valueHigh;
-        };
-    };
-
-    inline void InitRegister(RMField registerIndex)
-    {
-        type = OP_REGISTER;
-        regmemIndex = registerIndex;
-    }
-};
+#include "common.cpp"
+#include "disassembly.cpp"
 
 inline u8 Load8BitValue(FILE* file)
 {
@@ -128,6 +15,31 @@ inline u16 Load16BitValue(FILE* file)
     *((u8 *)(&value) + 0) = (u8)fgetc(file);
     *((u8 *)(&value) + 1) = (u8)fgetc(file);
     return value;
+}
+
+
+Disassembly_Operand InitRegisterOperand(RMField registerIndex)
+{
+    Disassembly_Operand result;
+    result.type = OP_REGISTER;
+    result.regmemIndex = registerIndex;
+    return result;
+}
+
+Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
+{
+    Disassembly_Operand result;
+    result.type = OP_SEGMENT_REGISTER;
+    result.regmemIndex = registerIndex;
+    return result;
+}
+
+Disassembly_Operand InitImmediateOperand(i16 value)
+{
+    Disassembly_Operand result;
+    result.type = OP_IMMEDIATE;
+    result.value = value;
+    return result;
 }
 
 /// @brief Loads memory 
@@ -234,6 +146,11 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
             printf("%s", registerNames[operand.regmemIndex]);
         }
         break;
+        case OP_SEGMENT_REGISTER:
+        {
+            printf("%s", registersSegment[operand.regmemIndex]);
+        }
+        break;
         case OP_IMMEDIATE:
         {
             if (operand.outputWidth)
@@ -332,16 +249,22 @@ enum Inst_1Byte
     // TODO: Find instruction names and definitions
     INST_RET_WITHIN_SEGMENT   = 0b11000011,
     INST_RET_INTERSEGMENT  = 0b11001011,
-};
 
+
+    //
+
+    INST_LEA = 0b10001101,
+    INST_LDS = 0b11000101,
+    INST_LES = 0b11000100,
+};
 
 int main(int argc, char** argv)
 {
-    char* registers8[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
-    char* registers16[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
-    char* effectiveAddress[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
-
     char* subOpType[] = {"add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"};
+
+    Disassembly_InstructionType instructionSubtypes[] = {
+        DIS_ADD, DIS_OR, DIS_ADC, DIS_SBB, DIS_AND, DIS_SUB, DIS_XOR, DIS_CMP
+    };
 
     if (argc == 2)
     {
@@ -354,305 +277,245 @@ int main(int argc, char** argv)
         if (file)
         {
             int input;
+            // NOTE: fgetc is important here otherwise the loop might not end.
             while((input = fgetc(file)) != EOF)
             {
                 u8 opcode = (u8)input;
 
-                if (opcode == INST_XLAT) printf("xlat");
-                else if (opcode == INST_DAA) printf("daa");
-                else if (opcode == INST_AAA) printf("aaa");
-                else if (opcode == INST_AAS) printf("aas");
-                else if (opcode == INST_DAS) printf("das");
-                else if (opcode == INST_CBW) printf("cbw");
-                else if (opcode == INST_CWD) printf("cwd");
-                else if (opcode == INST_INT3) printf("int 3");
-                else if (opcode == INST_INTO) printf("into");
-                else if (opcode == INST_IRET) printf("iret");
-                else if (opcode == INST_CLC) printf("clc");
-                else if (opcode == INST_CMC) printf("cmc");
-                else if (opcode == INST_STC) printf("stc");
-                else if (opcode == INST_CLD) printf("cld");
-                else if (opcode == INST_STD) printf("std");
-                else if (opcode == INST_CLI) printf("cli");
-                else if (opcode == INST_STI) printf("sti");
-                else if (opcode == INST_HLT) printf("hlt");
-                else if (opcode == INST_WAIT) printf("wait");
+                Disassembly_Instruction instruction {0};
+
+                if (opcode == INST_XLAT) instruction.type = DIS_XLAT;
+                else if (opcode == INST_DAA) instruction.type = DIS_DAA;
+                else if (opcode == INST_AAA) instruction.type = DIS_AAA;
+                else if (opcode == INST_AAS) instruction.type = DIS_AAS;
+                else if (opcode == INST_DAS) instruction.type = DIS_DAS;
+                else if (opcode == INST_CBW) instruction.type = DIS_CBW;
+                else if (opcode == INST_CWD) instruction.type = DIS_CWD;
+                else if (opcode == INST_INT3) 
+                {
+                    instruction.type = DIS_INT;
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitImmediateOperand(3);
+                }
+                else if (opcode == INST_INTO) instruction.type = DIS_INTO;
+                else if (opcode == INST_IRET) instruction.type = DIS_IRET;
+                else if (opcode == INST_CLC) instruction.type = DIS_CLC;
+                else if (opcode == INST_CMC) instruction.type = DIS_CMC;
+                else if (opcode == INST_STC) instruction.type = DIS_STC;
+                else if (opcode == INST_CLD) instruction.type = DIS_CLD;
+                else if (opcode == INST_STD) instruction.type = DIS_STD;
+                else if (opcode == INST_CLI) instruction.type = DIS_CLI;
+                else if (opcode == INST_STI) instruction.type = DIS_STI;
+                else if (opcode == INST_HLT) instruction.type = DIS_HLT;
+                else if (opcode == INST_WAIT) instruction.type = DIS_WAIT;
+                else if (opcode == INST_PUSHF) instruction.type = DIS_PUSHF;
+                else if (opcode == INST_POPF) instruction.type = DIS_POPF;
+                else if (opcode == INST_SAHF) instruction.type = DIS_SAHF;
+                else if (opcode == INST_LAHF) instruction.type = DIS_LAHF;
                 else if (opcode == INST_LOCK)
                 {
-                    printf("lock "); 
-                    continue;
+                    instruction.type = DIS_LOCK;
                 }
                 // FIXME: Probably inaccurate ret instructions
-                else if (opcode == INST_RET_INTERSEGMENT) printf("ret ; intersegment");
-                else if (opcode == INST_RET_WITHIN_SEGMENT) printf("ret ; within segment");
-                #define INST_LEA 0b10001101
-                #define INST_LDS 0b11000101
-                #define INST_LES 0b11000100
+                else if (opcode == INST_RET_INTERSEGMENT) instruction.type = DIS_RET; //printf("ret ; intersegment");
+                else if (opcode == INST_RET_WITHIN_SEGMENT) instruction.type = DIS_RET; // printf("ret ; within segment");
                 else if (opcode == INST_LEA || opcode == INST_LDS || opcode == INST_LES)
                 {
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
-                    Disassembly_Operand opDest {0};
-                    opDest.InitRegister(instOperand.reg);
-
-                    Disassembly_Operand opSrc {0};
-                    LoadMemoryOperand(file, &opSrc, instOperand.mod, instOperand.rm);
-
                     if (opcode == INST_LEA)
-                        printf("lea ");
+                        instruction.type = DIS_LEA;
                     else if (opcode == INST_LDS)
-                        printf("lds ");
+                        instruction.type = DIS_LDS;
                     else
-                        printf("les ");
+                        instruction.type = DIS_LES;
 
-                    PrintOperands(opDest, opSrc, true);
+                    instruction.isWide = true;
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
-                else if ((opcode & 0b11000100) == REG_RM_OP)
+                else if ((opcode & 0b11000100) == 0b00000000)
                 {
-                    bool directionBit = ((opcode >> 1) & 0b1);
-                    bool wideBit = (opcode & 0b1);
-                    u8 instructionType = ((opcode >> 3) & 0b111);
-
-                    printf("%s ", subOpType[instructionType]);
+                    instruction.isWide = (opcode & 0b1);
+                    instruction.switchOperands = !((opcode >> 1) & 0b1);
+                    instruction.type = instructionSubtypes[((opcode >> 3) & 0b111)];
+                    instruction.operandCount = 2;
 
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
-                    Disassembly_Operand operand1{0};
-                    operand1.InitRegister(instOperand.reg);
-
-                    Disassembly_Operand operand2{0};
-                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
-
-                    if (directionBit)
-                    {
-                        PrintOperands(operand1, operand2, wideBit);
-                    }
-                    else
-                    {
-                        PrintOperands(operand2, operand1, wideBit);
-                    }
+                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & 0b11110000) == 0b01010000) // Push/pop register
                 {
                     bool isPop = ((opcode >> 3) & 0b1);
                     RMField reg = (RMField)(opcode & 0b111);
-                    printf("%s %s", (isPop? "pop" : "push"), registers16bit[reg]);
+
+                    instruction.type = (isPop? DIS_POP : DIS_PUSH);
+                    instruction.operandCount = 1;
+                    instruction.isWide = true;
+                    instruction.operand1 = InitRegisterOperand(reg);
                 }
                 else if ((opcode & 0b11100110) == 0b00000110) // Push/pop segment register
                 {
                     bool isPop = (opcode & 0b1);
                     u8 segreg = ((opcode >> 3) & 0b11);
 
-                    printf("%s %s", (isPop? "pop" : "push"), registersSegment[segreg]);
+                    instruction.type = (isPop? DIS_POP : DIS_PUSH);
+                    instruction.operandCount = 1;
+                    instruction.isWide = true;
+                    instruction.operand1 = InitSegmentRegisterOperand((RMField)segreg);
                 }
                 else if ((opcode & 0b11110100) == 0b11100100) // IN/OUT fixed port
                 {
                     bool variableBit = ((opcode >> 3) & 0b1);
                     bool typeBit = ((opcode >> 1) & 0b1);
-                    bool wideBit = (opcode & 0b1);
 
-                    Disassembly_Operand acc {0};
-                    acc.InitRegister(REG_AX);
-
-                    Disassembly_Operand port {0};
-                    if (variableBit)
-                    {
-                        port.InitRegister(REG_DX);
-                    }
-                    else
-                    {
-                        LoadImmediateOperand(file, &port, false, false);
-                    }
+                    instruction.type = (typeBit? DIS_OUT : DIS_IN);
+                    instruction.switchOperands = (typeBit);
+                    instruction.isWide = (opcode & 0b1);
 
                     // FIXME: Operands should be unsigned
-                    if (typeBit)
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(REG_AX);
+
+                    if (variableBit)
                     {
-                        printf("out ");
-                        PrintOperand(port, (variableBit | wideBit));
-                        printf(", ");
-                        PrintOperand(acc, wideBit);
+                        instruction.operand2 = InitRegisterOperand(REG_DX);
                     }
                     else
                     {
-                        printf("in ");
-                        PrintOperand(acc, wideBit);
-                        printf(", ");
-                        PrintOperand(port, (variableBit | wideBit));
+                        // FIXME: Print as wide when (variableBit | wideBit)
+                        LoadImmediateOperand(file, &instruction.operand2, false, false);
                     }
                 }
                 else if ((opcode & 0b11111100) == (0b10000100))
                 {
-                    bool wideBit = (opcode & 0b1);
+                    instruction.isWide = (opcode & 0b1);
+                    instruction.type = DIS_XCHG;
+
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
-                    Disassembly_Operand operand1 {0};
-                    operand1.InitRegister(instOperand.reg);
-
-                    Disassembly_Operand operand2 {0};
-                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
-
-                    printf("xchg ");
-                    PrintOperands(operand1, operand2, wideBit);
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_XCHG_ACC_WITH_REG)
                 {
-                    Disassembly_Operand opAccumulator {0};
-                    opAccumulator.InitRegister(REG_AX);
-
-                    Disassembly_Operand opRegister {0};
-                    opRegister.InitRegister((RMField)(opcode & 0b111));
-
-                    printf("xchg ");
-                    PrintOperands(opAccumulator, opRegister, true);
+                    instruction.type = DIS_XCHG;
+                    instruction.operandCount = 2;
+                    instruction.isWide = true;
+                    instruction.operand1 = InitRegisterOperand(REG_AX);
+                    instruction.operand2 = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_INC_REG)
                 {
-                    Disassembly_Operand opRegister {0};
-                    opRegister.InitRegister((RMField)(opcode & 0b111));
-
-                    printf("inc ");
-                    PrintOperand(opRegister, true);
+                    instruction.type = DIS_INC;
+                    instruction.isWide = true;
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_DEC_REG)
                 {
-                    Disassembly_Operand opRegister {0};
-                    opRegister.InitRegister((RMField)(opcode & 0b111));
-
-                    printf("dec ");
-                    PrintOperand(opRegister, true);
+                    instruction.type = DIS_DEC;
+                    instruction.isWide = true;
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
+                    instruction.isWide = (opcode & 0b1);
                     u8 instructionType = ((opcode >> 3) & 0b111);
-                    bool wideBit = (opcode & 0b1);
+                    instruction.type = instructionSubtypes[instructionType];
 
-                    printf("%s ", subOpType[instructionType]);
-
-                    Disassembly_Operand operandDest {0};
-                    operandDest.InitRegister(REG_AX); // Same ID as REG_AL
-
-                    Disassembly_Operand operandSrc {0};
-                    LoadImmediateOperand(file, &operandSrc, wideBit, false);
-
-                    PrintOperands(operandDest, operandSrc, wideBit);
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(REG_AX); // Same ID as REG_AL
+                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11111100) == 0b10000000) // Immediate to register/memory
                 {
-                    // Structure:
-                    //   1000 00sw
-                    //   [mod(2) op(3) rm(3)]
-                    //   [DISP-LO]  [DISP-HI]
-                    //   [data]     [data if s:w = 01]
-                    
                     bool signBit = ((opcode >> 1) & 0b1);
-                    bool wideBit = (opcode & 0b1);
+                    instruction.isWide = (opcode & 0b1);
 
                     Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     // NOTE: For immediate instructions, the REG part of the operand byte determines the operation type.
-                    printf("%s ", subOpType[instructionOperand.reg]);
+                    instruction.type = instructionSubtypes[instructionOperand.reg];
 
-                    Disassembly_Operand operandDest {0};
-                    operandDest.outputWidth = true;
-                    LoadMemoryOperand(file, &operandDest, instructionOperand.mod, instructionOperand.rm);
-
-                    Disassembly_Operand operandSrc {0};
-                    LoadImmediateOperand(file, &operandSrc, wideBit, signBit);
-                    
-                    PrintOperands(operandDest, operandSrc, wideBit);
+                    instruction.operandCount = 2;
+                    instruction.operand1.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.operand1, instructionOperand.mod, instructionOperand.rm);
+                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, signBit);
                 }
-                else if ((opcode & 0b11111110) == MOV_IMM_MEM) // MOVE immediate to register/memory
+                else if ((opcode & 0b11111110) == 0b11000110) // MOVE immediate to register/memory
                 {
-                    printf("mov ");
-                    bool wideBit = (opcode & 0b01);
+                    instruction.type = DIS_MOV;
+                    instruction.isWide = (opcode & 0b1);
 
-                    Inst_Operand instOperand = Inst_ParseOperand((u8)fgetc(file));
+                    Inst_Operand instOperand = Inst_ParseOperand((u8)Load8BitValue(file));
 
-                    // NOTE: Other reg values are not used.
-                    Assert(instOperand.reg == 0b000);
+                    Assert(instOperand.reg == 0b000);// NOTE: Other reg values are not used. 
 
-                    Disassembly_Operand operandDest {0};
-                    LoadMemoryOperand(file, &operandDest, instOperand.mod, instOperand.rm);
-
-                    Disassembly_Operand operandSrc {0};
-                    operandSrc.outputWidth = true;
-                    LoadImmediateOperand(file, &operandSrc, wideBit, false);
-
-                    PrintOperands(operandDest, operandSrc, wideBit);
+                    instruction.operandCount = 2;
+                    instruction.operand2.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.operand1, instOperand.mod, instOperand.rm);
+                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
                 }
-                else if ((opcode & 0b11111100) == MOV_RM)
+                else if ((opcode & 0b11111100) == 0b10001000)
                 {
-                    printf("mov ");
-                    
-                    bool directionBit = ((opcode >> 1) & 0b1);
-                    bool wideBit = (opcode & 0b1);
+                    instruction.type = DIS_MOV;
+                    instruction.isWide = (opcode & 0b1);
+                    instruction.switchOperands = !((opcode >> 1) & 0b1);
 
-                    Inst_Operand instOperand = Inst_ParseOperand(fgetc(file));
+                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
-                    Disassembly_Operand operand1{0};
-                    operand1.InitRegister(instOperand.reg);
-
-                    Disassembly_Operand operand2{0};
-                    LoadMemoryOperand(file, &operand2, instOperand.mod, instOperand.rm);
-
-                    if (directionBit)
-                    {
-                        PrintOperands(operand1, operand2, wideBit);
-                    }
-                    else
-                    {
-                        PrintOperands(operand2, operand1, wideBit);
-                    }
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
-                else if ((opcode & 0b11111100) == MOV_AX_MEMORY)
-                // ANCHOR: MOV accumulator-memory
-                // - MOV, Memory to accumulator
-                // - MOV, Accumulator to memory
+                else if ((opcode & 0b11111100) == 0b10100000) // MOV accumulator-memory
                 {
                     // NOTE: The direction bit here has opposite meaning to the standard one, and it's written as 2 separate commands in the manual.
-                    bool direction = ((opcode & 0b10) >> 1);
-                    bool wide = (opcode & 0b01);
+                    instruction.switchOperands = ((opcode >> 1) & 0b1);
+                    instruction.isWide = (opcode & 0b1);
 
-                    u16 AddressInMemory = Load16BitValue(file);
-
-                    if (direction) 
-                    {
-                        printf("mov [%d], ax", AddressInMemory);
-                    }
-                    else
-                    {
-                        printf("mov ax, [%d]", AddressInMemory);
-                    }
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(REG_AX);
+                    instruction.operand2.type = OP_MEMORY;
+                    instruction.operand2.regmemIndex = MEM_DIRECT;
+                    instruction.operand2.value = (i16)Load16BitValue(file);
                 }
                 else if (opcode == 0b11000010) // RET - within seg adding immediate to SP
                 {
-                    i16 offset = (i16)Load16BitValue(file);
-                    printf("ret %d", offset);
+                    instruction.type = DIS_RET;
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitImmediateOperand(Load16BitValue(file));
                 }
-                else if ((opcode & 0b11110000) == MOV_IMM_REG)
+                else if ((opcode & 0b11110000) == 0b10110000) // MOV imm -> reg
                 {
-                    printf("mov ");
-
-                    bool wideBit = ((opcode & 0b00001000) >> 3);
-                    RMField reg = (RMField)(opcode & 0b111);
-
-                    Disassembly_Operand opDest {0};
-                    opDest.InitRegister(reg);
-                    Disassembly_Operand opSrc {0};
-                    LoadImmediateOperand(file, &opSrc, wideBit, false);
-
-                    PrintOperands(opDest, opSrc, wideBit);
+                    instruction.type = DIS_MOV;
+                    instruction.isWide = ((opcode >> 3) & 0b1);
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
+                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11110000) == 0b01110000)
                 {
+                    Disassembly_InstructionType jumpSuptypes[] = {
+                        DIS_JO, DIS_JNO, DIS_JB, DIS_JNB, DIS_JE, DIS_JNE, DIS_JBE, DIS_JNBE,
+                        DIS_JS, DIS_JNS, DIS_JP, DIS_JNP, DIS_JL, DIS_JNL, DIS_JLE, DIS_JNLE
+                    };
                     // TODO: Jump labels
 
-                    char* jumpOpNames[] = {"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "ja", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jg"};
                     u8 jumpType = (opcode & 0b1111);
-                    i8 displacement = (i8)fgetc(file) + 2;
 
-                    printf(jumpOpNames[jumpType]);
+                    instruction.type = jumpSuptypes[jumpType];
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitImmediateOperand(((i8)Load8BitValue(file) + 2));
+                    instruction.operand1.outputWidth = false;
 
+                    /*
                     if (displacement >= 0)
                     {
                         printf(" $+%d", displacement);
@@ -660,81 +523,71 @@ int main(int argc, char** argv)
                     else
                     {
                         printf(" $%d", displacement);
-                    }
+                    }*/
                 }
                 else if ((opcode & 0b11111100) == 0b11100000)
                 {
-                    u8 loopType = (opcode & 0b1111);
-                    i8 displacement = (i8)fgetc(file) + 2;
+                    Disassembly_InstructionType loopTypes[] = { DIS_LOOPNZ, DIS_LOOPZ, DIS_LOOP, DIS_JCXZ};
 
-                    if      (loopType == 0b00) printf("loopnz");
-                    else if (loopType == 0b01) printf("loopz");
-                    else if (loopType == 0b10) printf("loop");
-                    else if (loopType == 0b11) printf("jcxz");
-                    else
-                    {
-                        printf("UNKNOWN_OP_LOOPS");
-                    }
-
-                    if (displacement >= 0)
-                    {
-                        printf(" $+%d", displacement);
-                    }
-                    else
-                    {
-                        printf(" $%d", displacement);
-                    }
+                    instruction.type = loopTypes[(opcode & 0b11)];
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitImmediateOperand((i8)Load8BitValue(file) + 2);
+                    instruction.operand1.outputWidth = false;
                 }
                 else if ((opcode & 0b11111111) == 0b10001111) // pop
                 {
-                    Inst_Operand instOperand = Inst_ParseOperand(fgetc(file));
+                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
                     Assert(instOperand.reg == 0b000); // NOTE: Other values are not used.
                     
-                    Disassembly_Operand operand {0};
-                    LoadMemoryOperand(file, &operand, instOperand.mod, instOperand.rm);
-
-                    printf("pop ");
-                    if (operand.modField != REGISTER_MODE)
-                    {
-                        printf("word ");
-                    }
-
-                    PrintOperand(operand, true);
+                    instruction.type = DIS_POP;
+                    instruction.operandCount = 1;
+                    instruction.isWide = true;
+                    instruction.operand1.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.operand1, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & 0b11111110) == 0b11111110)
                 {
-                    char* opNames[] = {"inc", "dec", "call", "call", "jmp", "jmp", "push", "; invalid op"};
+                    Disassembly_InstructionType instructionSubtypesInc[] = {DIS_INC, DIS_DEC, DIS_CALL, DIS_CALL, DIS_JMP, DIS_JMP, DIS_PUSH};
 
                     Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
-                    printf("%s ", opNames[instructionOperand.reg]);
 
-                    bool wide = (opcode & 0b1);
+                    Assert(instructionOperand.reg != 0b111);
 
-                    Disassembly_Operand operand {0};
-                    LoadMemoryOperand(file, &operand, instructionOperand.mod, instructionOperand.rm);
+                    instruction.isWide = (opcode & 0b1);
+                    instruction.type = instructionSubtypesInc[instructionOperand.reg];
 
-                    // NOTE: Push is always wide.
-                    // STUDY: Is this explicit "word" really necessary?
-                    if (instructionOperand.reg == 0b110)
+                    instruction.operandCount = 1;
+                    LoadMemoryOperand(file, &instruction.operand1, instructionOperand.mod, instructionOperand.rm);
+
+                    if (instructionOperand.reg == 0b110 || 
+                        instructionOperand.reg == 0b000 || 
+                        instructionOperand.reg == 0b001) // push/inc/dec
                     {
-                        printf("word ");
+                        instruction.operand1.outputWidth = true;
                     }
-                    else if (instructionOperand.reg == 0b000 || instructionOperand.reg == 0b001) // inc/dec
-                    {
-                        operand.outputWidth = true;
-                    }
-                    PrintOperand(operand, wide);
-                }
-                else if ((opcode & 0b11111100) == 0b10011100)
-                {
-                    char* opNames[] = {"pushf", "popf", "sahf", "lahf"};
-                    printf(opNames[(opcode & 0b11)]);
                 }
                 else
                 {
                     printf("; %x", opcode);
                 }
-                printf("\n");
+
+                Assert(instruction.operandCount >= 0 && instruction.operandCount <= 2);
+
+                // Print instruction
+                printf(operationNames[instruction.type]);
+                printf(" ");
+                if (instruction.operandCount == 1)
+                    PrintOperand(instruction.operand1, instruction.isWide);
+                else if (instruction.operandCount == 2)
+                {
+                    if (instruction.switchOperands)
+                        PrintOperands(instruction.operand2, instruction.operand1, instruction.isWide);
+                    else
+                        PrintOperands(instruction.operand1, instruction.operand2, instruction.isWide);
+                }
+
+                if (instruction.type != DIS_LOCK)
+                    printf("\n");
             }
 
             fclose(file);
