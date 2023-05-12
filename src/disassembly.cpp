@@ -166,6 +166,8 @@ enum Disassembly_InstructionType
     DIS_ESC,
     DIS_LOCK,
     DIS_SEGMENT,
+
+    DIS_NOOP
 };
 
 static const char* operationNames[] = {
@@ -175,7 +177,7 @@ static const char* operationNames[] = {
     "or", "xor", "rep", "movs", "cmps", "scas", "lods", "stds", "call", "jmp", "ret", "je", "jl", "jle", "jb",
     "jbe", "jp", "jo", "js", "jne", "jnl", "jnle", "jnb", "jnbe", "jnp", "jno", "jns", "loop", "loopz", "loopnz",
     "jcxz", "int", "into", "iret", "clc", "cmc", "stc", "cld", "std", "cli", "sti", "hlt", "wait", "esc", "lock",
-    "segment"
+    "segment", ";noop"
 };
 
 struct Disassembly_Instruction

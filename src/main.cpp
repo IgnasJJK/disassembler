@@ -194,13 +194,6 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
     }
 }
 
-void PrintOperands(Disassembly_Operand operand1, Disassembly_Operand operand2, bool wide)
-{
-    PrintOperand(operand1, wide);
-    printf(", ");
-    PrintOperand(operand2, wide);
-}
-
 #define MASK_INST_1BYTE_REG 0b11111000
 enum Inst_1ByteRegisterInstructions
 {
@@ -250,13 +243,82 @@ enum Inst_1Byte
     INST_RET_WITHIN_SEGMENT   = 0b11000011,
     INST_RET_INTERSEGMENT  = 0b11001011,
 
-
     //
 
     INST_LEA = 0b10001101,
     INST_LDS = 0b11000101,
     INST_LES = 0b11000100,
 };
+
+void PrintInstruction(Disassembly_Instruction* inst)
+{
+    Assert(inst->operandCount >= 0 && inst->operandCount <= 2);
+
+    printf(operationNames[inst->type]);
+    printf(" ");
+
+    switch (inst->type)
+    {
+        case DIS_JO:
+        case DIS_JNO:
+        case DIS_JB:
+        case DIS_JNB:
+        case DIS_JE:
+        case DIS_JNE:
+        case DIS_JBE:
+        case DIS_JNBE:
+        case DIS_JS:
+        case DIS_JNS:
+        case DIS_JP:
+        case DIS_JNP:
+        case DIS_JL:
+        case DIS_JNL:
+        case DIS_JLE:
+        case DIS_JNLE:
+        case DIS_LOOP:
+        case DIS_LOOPZ:
+        case DIS_LOOPNZ:
+        case DIS_JCXZ:
+        {
+            i8 displacement = inst->operand1.valueLow;
+            if (displacement >= 0)
+            {
+                printf(" $+%d", displacement);
+            }
+            else
+            {
+                printf(" $%d", displacement);
+            }
+        }
+        break;
+        default:
+        {
+            if (inst->operandCount == 1)
+            {
+                PrintOperand(inst->operand1, inst->isWide);
+            }
+            else if (inst->operandCount == 2)
+            {
+                if (inst->switchOperands)
+                {
+                    PrintOperand(inst->operand2, inst->isWide);
+                    printf(", ");
+                    PrintOperand(inst->operand1, inst->isWide);
+                }
+                else
+                {
+                    PrintOperand(inst->operand1, inst->isWide);
+                    printf(", ");
+                    PrintOperand(inst->operand2, inst->isWide);
+                }
+            }
+
+        }
+        break;
+    }
+
+    if (inst->type != DIS_LOCK) printf("\n");
+}
 
 int main(int argc, char** argv)
 {
@@ -319,6 +381,20 @@ int main(int argc, char** argv)
                 // FIXME: Probably inaccurate ret instructions
                 else if (opcode == INST_RET_INTERSEGMENT) instruction.type = DIS_RET; //printf("ret ; intersegment");
                 else if (opcode == INST_RET_WITHIN_SEGMENT) instruction.type = DIS_RET; // printf("ret ; within segment");
+                else if (opcode == 0b11010100) // AAM
+                {
+                    u8 nextByte = Load8BitValue(file);
+                    // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
+                    //Assert(nextByte == 0b00001010);
+                    instruction.type = DIS_AAM;
+                }
+                else if (opcode == 0b11010101) // AAD
+                {
+                    u8 nextByte = Load8BitValue(file);
+                    // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
+                    //Assert(nextByte == 0b00001010);
+                    instruction.type = DIS_AAD;
+                }
                 else if (opcode == INST_LEA || opcode == INST_LDS || opcode == INST_LES)
                 {
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
@@ -393,7 +469,7 @@ int main(int argc, char** argv)
                 else if ((opcode & 0b11111100) == (0b10000100))
                 {
                     instruction.isWide = (opcode & 0b1);
-                    instruction.type = DIS_XCHG;
+                    instruction.type = ((opcode >> 1) & 0b1) ? DIS_XCHG : DIS_TEST;
 
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
@@ -477,6 +553,7 @@ int main(int argc, char** argv)
                 else if ((opcode & 0b11111100) == 0b10100000) // MOV accumulator-memory
                 {
                     // NOTE: The direction bit here has opposite meaning to the standard one, and it's written as 2 separate commands in the manual.
+                    instruction.type = DIS_MOV;
                     instruction.switchOperands = ((opcode >> 1) & 0b1);
                     instruction.isWide = (opcode & 0b1);
 
@@ -514,16 +591,6 @@ int main(int argc, char** argv)
                     instruction.operandCount = 1;
                     instruction.operand1 = InitImmediateOperand(((i8)Load8BitValue(file) + 2));
                     instruction.operand1.outputWidth = false;
-
-                    /*
-                    if (displacement >= 0)
-                    {
-                        printf(" $+%d", displacement);
-                    }
-                    else
-                    {
-                        printf(" $%d", displacement);
-                    }*/
                 }
                 else if ((opcode & 0b11111100) == 0b11100000)
                 {
@@ -566,28 +633,43 @@ int main(int argc, char** argv)
                         instruction.operand1.outputWidth = true;
                     }
                 }
+                else if ((opcode & 0b11111110) == 0b10101000) // TEST imm, ax
+                {
+                    instruction.type = DIS_TEST;
+                    instruction.isWide = (opcode & 0b1);
+                    instruction.operandCount = 2;
+                    instruction.operand1 = InitRegisterOperand(REG_AX);
+                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                }
+                else if ((opcode & 0b11111110) == 0b11110110)
+                {
+                    Disassembly_InstructionType types[] = {DIS_TEST, DIS_NOOP, DIS_NOT, DIS_NEG, DIS_MUL, DIS_IMUL, DIS_DIV, DIS_IDIV};
+
+                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+
+                    instruction.type = types[operand.reg];
+                    instruction.isWide = (opcode & 0b1);
+
+                    if (operand.reg == 0b000)
+                    {
+                        instruction.operandCount = 2;
+                        LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
+                        instruction.operand1.outputWidth = true;
+                        LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                    }
+                    else
+                    {
+                        instruction.operandCount = 1;
+                        instruction.operand1.outputWidth = true;
+                        LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
+                    }
+                }
                 else
                 {
                     printf("; %x", opcode);
                 }
 
-                Assert(instruction.operandCount >= 0 && instruction.operandCount <= 2);
-
-                // Print instruction
-                printf(operationNames[instruction.type]);
-                printf(" ");
-                if (instruction.operandCount == 1)
-                    PrintOperand(instruction.operand1, instruction.isWide);
-                else if (instruction.operandCount == 2)
-                {
-                    if (instruction.switchOperands)
-                        PrintOperands(instruction.operand2, instruction.operand1, instruction.isWide);
-                    else
-                        PrintOperands(instruction.operand1, instruction.operand2, instruction.isWide);
-                }
-
-                if (instruction.type != DIS_LOCK)
-                    printf("\n");
+                PrintInstruction(&instruction);
             }
 
             fclose(file);
