@@ -20,7 +20,7 @@ inline u16 Load16BitValue(FILE* file)
 
 Disassembly_Operand InitRegisterOperand(RMField registerIndex)
 {
-    Disassembly_Operand result;
+    Disassembly_Operand result {0};
     result.type = OP_REGISTER;
     result.regmemIndex = registerIndex;
     return result;
@@ -28,7 +28,7 @@ Disassembly_Operand InitRegisterOperand(RMField registerIndex)
 
 Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
 {
-    Disassembly_Operand result;
+    Disassembly_Operand result {0};
     result.type = OP_SEGMENT_REGISTER;
     result.regmemIndex = registerIndex;
     return result;
@@ -36,7 +36,7 @@ Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
 
 Disassembly_Operand InitImmediateOperand(i16 value)
 {
-    Disassembly_Operand result;
+    Disassembly_Operand result {0};
     result.type = OP_IMMEDIATE;
     result.value = value;
     return result;
@@ -224,6 +224,7 @@ enum Inst_1Byte
     INST_XLAT  = 0b11010111,
 
     INST_INT3  = 0b11001100, // Interrupt 3
+    INST_INT   = 0b11001101, // Interrupt (specified)
     INST_INTO  = 0b11001110, // Interrupt on overflow
     INST_IRET  = 0b11001111, // Interrupt return
 
@@ -294,6 +295,36 @@ void PrintInstruction(Disassembly_Instruction* inst)
             }
         }
         break;
+        
+        case DIS_SHL:
+        case DIS_SHR:
+        case DIS_SAR:
+        case DIS_ROL:
+        case DIS_ROR:
+        case DIS_RCL:
+        case DIS_RCR:
+        {
+            PrintOperand(inst->operand1, inst->isWide);
+            printf(", ");
+            PrintOperand(inst->operand2, false);
+        }
+        break;
+
+        case DIS_IN:
+        {
+            PrintOperand(inst->operand1, inst->isWide);
+            printf(", ");
+            PrintOperand(inst->operand2, true);
+        } 
+        break;
+        case DIS_OUT:
+        {
+            PrintOperand(inst->operand2, true);
+            printf(", ");
+            PrintOperand(inst->operand1, inst->isWide);
+        }
+        break;
+
         default:
         {
             if (inst->operandCount == 1)
@@ -416,6 +447,12 @@ int main(int argc, char** argv)
                     instruction.operand1 = InitRegisterOperand(instOperand.reg);
                     LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
                 }
+                else if (opcode == INST_INT)
+                {
+                    instruction.type = DIS_INT;
+                    instruction.operandCount = 1;
+                    instruction.operand1 = InitImmediateOperand(Load8BitValue(file));
+                }
                 else if ((opcode & 0b11111110) == 0b11110010) instruction.type = DIS_REP;
                 else if ((opcode & 0b11111110) == 0b10100100) instruction.type = (opcode & 0b1) ? DIS_MOVSW : DIS_MOVSB;
                 else if ((opcode & 0b11111110) == 0b10100110) instruction.type = (opcode & 0b1) ? DIS_CMPSW : DIS_CMPSB;
@@ -535,6 +572,28 @@ int main(int argc, char** argv)
                     LoadMemoryOperand(file, &instruction.operand1, instructionOperand.mod, instructionOperand.rm);
                     LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, signBit);
                 }
+                else if ((opcode & 0b11111100) == 0b11010000) // Logic operations
+                {
+                    Disassembly_InstructionType logicSubtypes[] = {DIS_ROL, DIS_ROR, DIS_RCL, DIS_RCR, DIS_SHL, DIS_SHR, DIS_NOOP, DIS_SAR};
+                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+
+                    instruction.type = logicSubtypes[operand.reg];
+                    instruction.isWide = (opcode & 0b1);
+
+                    instruction.operandCount = 2;
+                    instruction.operand1.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
+
+                    bool shiftByCLValue = ((opcode >> 1) & 0b1);
+                    if (shiftByCLValue)
+                    {
+                        instruction.operand2 = InitRegisterOperand(REG_CX);
+                    }
+                    else
+                    {
+                        instruction.operand2 = InitImmediateOperand(1);
+                    }
+                }
                 else if ((opcode & 0b11111110) == 0b11000110) // MOVE immediate to register/memory
                 {
                     instruction.type = DIS_MOV;
@@ -579,7 +638,6 @@ int main(int argc, char** argv)
                     instruction.type = DIS_RET;
                     instruction.operandCount = 1;
                     instruction.operand1 = InitImmediateOperand((i16)Load16BitValue(file));
-                    instruction.operand1.outputWidth = false;
                 }
                 else if ((opcode & 0b11110000) == 0b10110000) // MOV imm -> reg
                 {
@@ -602,7 +660,6 @@ int main(int argc, char** argv)
                     instruction.type = jumpSuptypes[jumpType];
                     instruction.operandCount = 1;
                     instruction.operand1 = InitImmediateOperand(((i8)Load8BitValue(file) + 2));
-                    instruction.operand1.outputWidth = false;
                 }
                 else if ((opcode & 0b11111100) == 0b11100000)
                 {
@@ -611,7 +668,6 @@ int main(int argc, char** argv)
                     instruction.type = loopTypes[(opcode & 0b11)];
                     instruction.operandCount = 1;
                     instruction.operand1 = InitImmediateOperand((i8)Load8BitValue(file) + 2);
-                    instruction.operand1.outputWidth = false;
                 }
                 else if ((opcode & 0b11111111) == 0b10001111) // pop
                 {
