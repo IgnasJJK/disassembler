@@ -10,4 +10,9 @@ nasm tests\%1.asm -o temp\assembly
 build\main.exe temp\assembly > temp\disassembly.asm
 nasm temp\disassembly.asm -o temp\disassembly
 
-IF EXIST temp\disassembly fc temp\disassembly temp\assembly
+
+IF EXIST temp\disassembly (
+    fc temp\disassembly temp\assembly
+
+    build\main.exe -e temp\disassembly > temp\disassembly-exec.asm
+)

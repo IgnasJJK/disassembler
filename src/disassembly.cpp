@@ -26,9 +26,22 @@ enum RMField
     MEM_BX,    // | BH | DI | BX + (disp)
 
 #define REG_AX MEM_BX_SI
+#define REG_AL MEM_BX_SI
 #define REG_BX MEM_BP_DI
+#define REG_BL MEM_BP_DI
 #define REG_CX MEM_BX_DI
+#define REG_CL MEM_BX_DI
 #define REG_DX MEM_BP_SI
+#define REG_DL MEM_BP_SI
+
+#define REG_SP MEM_SI
+#define REG_BP MEM_DI
+#define REG_SI MEM_BP
+#define REG_DI MEM_BX
+#define REG_AH MEM_SI
+#define REG_CH MEM_DI
+#define REG_DH MEM_BP
+#define REG_BH MEM_BX
 
 #define MEM_DIRECT MEM_BP
 };
@@ -55,8 +68,10 @@ struct Disassembly_Operand
     RMField regmemIndex;
     ModField modField;
 
+    // TODO: Remove. This flag can be determined from the instruction details.
     bool outputWidth;
 
+    // TODO: Change sign. Unsigned may be better as a default.
     union
     {
         i16 value;
@@ -190,10 +205,23 @@ struct Disassembly_Instruction
     Disassembly_InstructionType type;
     int operandCount;
 
-    Disassembly_Operand operand1;
-    Disassembly_Operand operand2;
+    // TODO: Remove unions when switchOperands is removed.
+    union
+    {
+        Disassembly_Operand operand1;
+        Disassembly_Operand opDest;
+    };
+    union
+    {
+        Disassembly_Operand operand2;
+        Disassembly_Operand opSrc;
+    };
 
     bool isWide;
+
+    // TODO: It's not necessary to store the switchOperands flag in the instruction, because
+    // it only determines how the instruction would be written. The operation is sematically
+    // oriented only SRC -> DEST. (This can be done when parsing)
     bool switchOperands;
 };
 
@@ -209,5 +237,29 @@ Inst_Operand Inst_ParseOperand(u8 byte)
     result.reg = (RMField)((byte >> 3) & 0b111);
     result.rm = (RMField)(byte & 0b111);
 
+    return result;
+}
+
+Disassembly_Operand InitRegisterOperand(RMField registerIndex)
+{
+    Disassembly_Operand result {0};
+    result.type = OP_REGISTER;
+    result.regmemIndex = registerIndex;
+    return result;
+}
+
+Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
+{
+    Disassembly_Operand result {0};
+    result.type = OP_SEGMENT_REGISTER;
+    result.regmemIndex = registerIndex;
+    return result;
+}
+
+Disassembly_Operand InitImmediateOperand(i16 value)
+{
+    Disassembly_Operand result {0};
+    result.type = OP_IMMEDIATE;
+    result.value = value;
     return result;
 }

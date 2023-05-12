@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "common.cpp"
 #include "disassembly.cpp"
@@ -15,31 +16,6 @@ inline u16 Load16BitValue(FILE* file)
     *((u8 *)(&value) + 0) = (u8)fgetc(file);
     *((u8 *)(&value) + 1) = (u8)fgetc(file);
     return value;
-}
-
-
-Disassembly_Operand InitRegisterOperand(RMField registerIndex)
-{
-    Disassembly_Operand result {0};
-    result.type = OP_REGISTER;
-    result.regmemIndex = registerIndex;
-    return result;
-}
-
-Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
-{
-    Disassembly_Operand result {0};
-    result.type = OP_SEGMENT_REGISTER;
-    result.regmemIndex = registerIndex;
-    return result;
-}
-
-Disassembly_Operand InitImmediateOperand(i16 value)
-{
-    Disassembly_Operand result {0};
-    result.type = OP_IMMEDIATE;
-    result.value = value;
-    return result;
 }
 
 /// @brief Loads memory 
@@ -350,30 +326,88 @@ void PrintInstruction(Disassembly_Instruction* inst)
         }
         break;
     }
+}
 
-    if (inst->type != DIS_LOCK && 
-        inst->type != DIS_REP)
-        printf("\n");
+struct CPU 
+{
+    union { u16 ax; struct { u8 al, ah; }; };
+    union { u16 bx; struct { u8 bl, bh; }; };
+    union { u16 cx; struct { u8 cl, ch; }; };
+    union { u16 dx; struct { u8 dl, dh; }; };
+    u16 sp;
+    u16 bp;
+    u16 si;
+    u16 di;
+
+    void* GetPointerToRegister(RMField regIndex, bool wide)
+    {
+        switch(regIndex)
+        {
+            case REG_AX: return (wide? (void*)&ax : (void*)&al);
+            case REG_BX: return (wide? (void*)&bx : (void*)&bl);
+            case REG_CX: return (wide? (void*)&cx : (void*)&cl);
+            case REG_DX: return (wide? (void*)&dx : (void*)&dl);
+            case REG_SP: return (wide? (void*)&sp : (void*)&ah);
+            case REG_BP: return (wide? (void*)&bp : (void*)&ch);
+            case REG_SI: return (wide? (void*)&si : (void*)&dh);
+            case REG_DI: return (wide? (void*)&di : (void*)&bh);
+            default:
+                Assert(true);
+                return 0;
+        }
+    }
+};
+
+void PrintBinary(u16 value)
+{
+    u16 index = (1 << 15);
+    while(index)
+    {
+        if (index == (1 << 7))
+            printf(" ");
+
+        printf((value & index) ? "1" : "0");
+        index >>= 1;
+    }
 }
 
 int main(int argc, char** argv)
 {
-    char* subOpType[] = {"add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"};
-
     Disassembly_InstructionType instructionSubtypes[] = {
         DIS_ADD, DIS_OR, DIS_ADC, DIS_SBB, DIS_AND, DIS_SUB, DIS_XOR, DIS_CMP
     };
 
-    if (argc == 2)
+    bool execute = false;
+    CPU cpu {0};
+
+    if (argc > 2)
     {
-        char* fileName = argv[1];
-        printf("; Disassembly: %s\n", fileName);
-        printf("bits 16\n");
+        for (int argIndex = 1; argIndex < argc - 1; ++argIndex)
+        {
+            char* arg = argv[argIndex];
+
+            if (strcmp("-e", arg) == 0 || strcmp("-E", arg) == 0)
+            {
+                execute = true;
+            }
+            else
+            {
+                // TODO: Error logging?
+            }
+        }
+    }
+
+    if (argc >= 2)
+    {
+        char* fileName = argv[argc - 1];
 
         FILE* file = fopen(fileName, "rb");
 
         if (file)
         {
+            printf("; Disassembly: %s\n", fileName);
+            printf("bits 16\n");
+
             int input;
             // NOTE: fgetc is important here otherwise the loop might not end.
             while((input = fgetc(file)) != EOF)
@@ -612,13 +646,26 @@ int main(int argc, char** argv)
                 {
                     instruction.type = DIS_MOV;
                     instruction.isWide = (opcode & 0b1);
-                    instruction.switchOperands = !((opcode >> 1) & 0b1);
+                    bool switchOperands = ((opcode >> 1) & 0b1);
 
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
+
+                    Disassembly_Operand* op1;
+                    Disassembly_Operand* op2;
+                    if (switchOperands)
+                    {
+                        op1 = &instruction.operand1;
+                        op2 = &instruction.operand2;
+                    }
+                    else
+                    {
+                        op1 = &instruction.operand2;
+                        op2 = &instruction.operand1;
+                    }
+                    *op1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, op2, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & 0b11111100) == 0b10100000) // MOV accumulator-memory
                 {
@@ -738,9 +785,82 @@ int main(int argc, char** argv)
                 }
 
                 PrintInstruction(&instruction);
+
+                if (execute)
+                {
+                    switch(instruction.type)
+                    {
+                        case DIS_MOV:
+                        {
+
+                            if (instruction.operand1.type == OP_REGISTER &&
+                                instruction.operand2.type == OP_IMMEDIATE)
+                            {
+                                void* dest = cpu.GetPointerToRegister(instruction.operand1.regmemIndex, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16 srcValue = instruction.operand2.value;
+                                    *((u16*)dest) = srcValue;
+                                    printf("; %s <- %d", registers16bit[instruction.operand1.regmemIndex], srcValue);
+                                }
+                                else
+                                {
+                                    u8 srcValue = instruction.operand2.valueLow;
+                                    *((u8*)dest) = srcValue;
+                                    printf("; %s <- %d", registers8bit[instruction.operand1.regmemIndex], srcValue);
+                                }
+                            }
+                            else if (instruction.operand1.type == OP_REGISTER &&
+                                instruction.operand2.type == OP_REGISTER)
+                            {
+                                void* dest = cpu.GetPointerToRegister(instruction.opDest.regmemIndex, instruction.isWide);
+                                void* src = cpu.GetPointerToRegister(instruction.opSrc.regmemIndex, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16 newValue = *((u16*)src);
+                                    *((u16*)dest) = newValue;
+                                    printf("; %s <- %d", registers16bit[instruction.opDest.regmemIndex], newValue);
+                                }
+                                else
+                                {
+                                    u8 newValue = *((u8*)src);
+                                    *((u8*)dest) = newValue;
+                                    printf("; %s <- %d", registers8bit[instruction.opDest.regmemIndex], newValue);
+                                }
+                            }
+                            else
+                            {
+                                printf(" ; MOV - not implemented");
+                            }
+                        }
+                        break;
+                        default:
+                            printf(" ; not implemented");
+                        break;
+                    }
+                }
+
+                if (instruction.type != DIS_LOCK && instruction.type != DIS_REP)
+                    printf("\n");
             }
 
             fclose(file);
+
+            if (execute)
+            {
+                printf("\n");
+                printf("; Final state:\n");
+                printf("; AX: "); PrintBinary(cpu.ax); printf(" (%d)\n", cpu.ax);
+                printf("; BX: "); PrintBinary(cpu.bx); printf(" (%d)\n", cpu.bx);
+                printf("; CX: "); PrintBinary(cpu.cx); printf(" (%d)\n", cpu.cx);
+                printf("; DX: "); PrintBinary(cpu.dx); printf(" (%d)\n", cpu.dx);
+                printf("; SP: "); PrintBinary(cpu.sp); printf(" (%d)\n", cpu.sp);
+                printf("; BP: "); PrintBinary(cpu.bp); printf(" (%d)\n", cpu.bp);
+                printf("; SI: "); PrintBinary(cpu.si); printf(" (%d)\n", cpu.si);
+                printf("; DI: "); PrintBinary(cpu.di); printf(" (%d)\n", cpu.di);
+            }
         }
         else
         {
@@ -749,6 +869,7 @@ int main(int argc, char** argv)
     }
     else
     {
-        printf("Usage: main.exe <filename>\n");
+        printf("Usage: main.exe [-e] <filename>\n");
+        printf("    -e -- Execute\n");
     }
 }
