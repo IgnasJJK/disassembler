@@ -5,6 +5,11 @@
 #include "common.cpp"
 #include "disassembly.cpp"
 
+static char* const registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+static char* const registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+static char* const registersSegment[] = {"es", "cs", "ss", "ds"};
+static char* const effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
+
 inline u8 Load8BitValue(FILE* file)
 {
     return (u8)fgetc(file);
@@ -103,11 +108,6 @@ void PrintAddressOperand(char* effectiveAddress, i16 displacement)
             (displacement < 0 ? -displacement : displacement));
     }
 }
-
-static char* const registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
-static char* const registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
-static char* const registersSegment[] = {"es", "cs", "ss", "ds"};
-static char* const effectiveAddressTable[] = { "bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx" };
 
 void PrintOperand(Disassembly_Operand operand, bool wideOperation)
 {
@@ -228,6 +228,10 @@ enum Inst_1Byte
     INST_LEA = 0b10001101,
     INST_LDS = 0b11000101,
     INST_LES = 0b11000100,
+
+    // MOV with segment registers
+    INST_MOV_REGMEM_SR = 0b10001110,
+    INST_MOV_SR_REGMEM = 0b10001100
 };
 
 void PrintInstruction(Disassembly_Instruction* inst)
@@ -330,30 +334,59 @@ void PrintInstruction(Disassembly_Instruction* inst)
 
 struct CPU 
 {
-    union { u16 ax; struct { u8 al, ah; }; };
-    union { u16 bx; struct { u8 bl, bh; }; };
-    union { u16 cx; struct { u8 cl, ch; }; };
-    union { u16 dx; struct { u8 dl, dh; }; };
-    u16 sp;
-    u16 bp;
-    u16 si;
-    u16 di;
+    // Registers
 
-    void* GetPointerToRegister(RMField regIndex, bool wide)
+    union
     {
-        switch(regIndex)
+        u16 reg16[8];
+        struct { u16 ax, cx, dx, bx, sp, bp, si, di; };
+
+        u8  reg8[16];
+        struct { u8 al, ah, cl, ch, dl, dh, bl, bh; };
+    };
+
+    // Segment registers
+    union
+    {
+        u16 regseg[4];
+        struct { u16 es, cs, ss, ds; };
+    };
+
+    void* GetPointerToRegister(Disassembly_Operand* op, bool wide)
+    {
+        Assert(op->type == OP_REGISTER || op->type == OP_SEGMENT_REGISTER);
+
+        if (op->type == OP_REGISTER)
         {
-            case REG_AX: return (wide? (void*)&ax : (void*)&al);
-            case REG_BX: return (wide? (void*)&bx : (void*)&bl);
-            case REG_CX: return (wide? (void*)&cx : (void*)&cl);
-            case REG_DX: return (wide? (void*)&dx : (void*)&dl);
-            case REG_SP: return (wide? (void*)&sp : (void*)&ah);
-            case REG_BP: return (wide? (void*)&bp : (void*)&ch);
-            case REG_SI: return (wide? (void*)&si : (void*)&dh);
-            case REG_DI: return (wide? (void*)&di : (void*)&bh);
-            default:
-                Assert(true);
-                return 0;
+            Assert((int)op->regmemIndex < 8)
+
+            if (wide) 
+                return &reg16[op->regmemIndex];
+
+            switch (op->regmemIndex)
+            {
+                case REG_AL: return &al;
+                case REG_AH: return &ah;
+                case REG_CL: return &cl;
+                case REG_CH: return &ch;
+                case REG_DL: return &dl;
+                case REG_DH: return &dh;
+                case REG_BL: return &bl;
+                case REG_BH: return &bh;
+                default:
+                    Assert(false);
+                    return nullptr;
+            }
+        }
+        else if (op->type == OP_SEGMENT_REGISTER)
+        {
+            Assert((int)op->regmemIndex < 4);
+
+            return &regseg[op->regmemIndex];
+        }
+        else
+        {
+            return nullptr;
         }
     }
 };
@@ -453,14 +486,14 @@ int main(int argc, char** argv)
                 else if (opcode == INST_RET_WITHIN_SEGMENT) instruction.type = DIS_RET; // printf("ret ; within segment");
                 else if (opcode == INST_AAM) // AAM
                 {
-                    u8 nextByte = Load8BitValue(file);
+                    Load8BitValue(file);
                     // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
                     //Assert(nextByte == 0b00001010);
                     instruction.type = DIS_AAM;
                 }
                 else if (opcode == INST_AAD) // AAD
                 {
-                    u8 nextByte = Load8BitValue(file);
+                    Load8BitValue(file);
                     // STUDY: It's supposed to be 0b00001010, but it's different. Trash data?
                     //Assert(nextByte == 0b00001010);
                     instruction.type = DIS_AAD;
@@ -486,6 +519,32 @@ int main(int argc, char** argv)
                     instruction.type = DIS_INT;
                     instruction.operandCount = 1;
                     instruction.operand1 = InitImmediateOperand(Load8BitValue(file));
+                }
+                else if (opcode == INST_MOV_REGMEM_SR || opcode == INST_MOV_SR_REGMEM)
+                {
+                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+                    instruction.type = DIS_MOV;
+                    instruction.operandCount = 2;
+                    instruction.isWide = true;
+
+                    bool toSegmentRegister = ((opcode >> 1) & 0b1);
+
+                    Disassembly_Operand* segment;
+                    Disassembly_Operand* regmem;
+                    if (toSegmentRegister)
+                    {
+                        segment = &instruction.opDest;
+                        regmem = &instruction.opSrc;
+                    }
+                    else
+                    {
+                        segment = &instruction.opSrc;
+                        regmem = &instruction.opDest;
+                    }
+
+                    segment->type = OP_SEGMENT_REGISTER;
+                    segment->regmemIndex = operand.reg;
+                    LoadMemoryOperand(file, regmem, operand.mod, operand.rm);
                 }
                 else if ((opcode & 0b11111110) == 0b11110010) instruction.type = DIS_REP;
                 else if ((opcode & 0b11111110) == 0b10100100) instruction.type = (opcode & 0b1) ? DIS_MOVSW : DIS_MOVSB;
@@ -544,7 +603,6 @@ int main(int argc, char** argv)
                     }
                     else
                     {
-                        // FIXME: Print as wide when (variableBit | wideBit)
                         LoadImmediateOperand(file, &instruction.operand2, false, false);
                     }
                 }
@@ -793,41 +851,52 @@ int main(int argc, char** argv)
                         case DIS_MOV:
                         {
 
-                            if (instruction.operand1.type == OP_REGISTER &&
-                                instruction.operand2.type == OP_IMMEDIATE)
+                            if (instruction.opDest.type == OP_REGISTER &&
+                                instruction.opSrc.type == OP_IMMEDIATE)
                             {
-                                void* dest = cpu.GetPointerToRegister(instruction.operand1.regmemIndex, instruction.isWide);
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
 
                                 if (instruction.isWide)
                                 {
-                                    u16 srcValue = instruction.operand2.value;
+                                    u16 srcValue = instruction.opSrc.value;
                                     *((u16*)dest) = srcValue;
-                                    printf("; %s <- %d", registers16bit[instruction.operand1.regmemIndex], srcValue);
+                                    printf("; %s := %d (0x%x)",
+                                        registers16bit[instruction.opDest.regmemIndex],
+                                        srcValue, srcValue);
                                 }
                                 else
                                 {
-                                    u8 srcValue = instruction.operand2.valueLow;
+                                    u8 srcValue = instruction.opSrc.valueLow;
                                     *((u8*)dest) = srcValue;
-                                    printf("; %s <- %d", registers8bit[instruction.operand1.regmemIndex], srcValue);
+                                    printf("; %s := %d (0x%x)",
+                                        registers8bit[instruction.opDest.regmemIndex],
+                                        srcValue, srcValue);
                                 }
                             }
-                            else if (instruction.operand1.type == OP_REGISTER &&
-                                instruction.operand2.type == OP_REGISTER)
+                            else if ((instruction.opSrc.type == OP_REGISTER || instruction.opSrc.type == OP_SEGMENT_REGISTER) &&
+                                (instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER))
                             {
-                                void* dest = cpu.GetPointerToRegister(instruction.opDest.regmemIndex, instruction.isWide);
-                                void* src = cpu.GetPointerToRegister(instruction.opSrc.regmemIndex, instruction.isWide);
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+                                void* src = cpu.GetPointerToRegister(&instruction.opSrc, instruction.isWide);
 
                                 if (instruction.isWide)
                                 {
                                     u16 newValue = *((u16*)src);
                                     *((u16*)dest) = newValue;
-                                    printf("; %s <- %d", registers16bit[instruction.opDest.regmemIndex], newValue);
+
+                                    printf("; %s := %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers16bit[instruction.opDest.regmemIndex]), 
+                                        newValue, newValue);
                                 }
                                 else
                                 {
                                     u8 newValue = *((u8*)src);
                                     *((u8*)dest) = newValue;
-                                    printf("; %s <- %d", registers8bit[instruction.opDest.regmemIndex], newValue);
+                                    printf("; %s := %d (0x%x)", 
+                                        registers8bit[instruction.opDest.regmemIndex], 
+                                        newValue, newValue);
                                 }
                             }
                             else
@@ -852,14 +921,19 @@ int main(int argc, char** argv)
             {
                 printf("\n");
                 printf("; Final state:\n");
-                printf("; AX: "); PrintBinary(cpu.ax); printf(" (%d)\n", cpu.ax);
-                printf("; BX: "); PrintBinary(cpu.bx); printf(" (%d)\n", cpu.bx);
-                printf("; CX: "); PrintBinary(cpu.cx); printf(" (%d)\n", cpu.cx);
-                printf("; DX: "); PrintBinary(cpu.dx); printf(" (%d)\n", cpu.dx);
-                printf("; SP: "); PrintBinary(cpu.sp); printf(" (%d)\n", cpu.sp);
-                printf("; BP: "); PrintBinary(cpu.bp); printf(" (%d)\n", cpu.bp);
-                printf("; SI: "); PrintBinary(cpu.si); printf(" (%d)\n", cpu.si);
-                printf("; DI: "); PrintBinary(cpu.di); printf(" (%d)\n", cpu.di);
+                printf("; AX: 0x%x (%d)\n", cpu.ax, cpu.ax);
+                printf("; BX: 0x%x (%d)\n", cpu.bx, cpu.bx);
+                printf("; CX: 0x%x (%d)\n", cpu.cx, cpu.cx);
+                printf("; DX: 0x%x (%d)\n", cpu.dx, cpu.dx);
+                printf("; SP: 0x%x (%d)\n", cpu.sp, cpu.sp);
+                printf("; BP: 0x%x (%d)\n", cpu.bp, cpu.bp);
+                printf("; SI: 0x%x (%d)\n", cpu.si, cpu.si);
+                printf("; DI: 0x%x (%d)\n", cpu.di, cpu.di);
+                printf("\n");
+                printf("; ES: 0x%x (%d)\n", cpu.es, cpu.es);
+                printf("; CS: 0x%x (%d)\n", cpu.cs, cpu.cs);
+                printf("; SS: 0x%x (%d)\n", cpu.ss, cpu.ss);
+                printf("; DS: 0x%x (%d)\n", cpu.ds, cpu.ds);
             }
         }
         else

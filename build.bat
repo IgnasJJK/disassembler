@@ -4,6 +4,6 @@ IF NOT EXIST build MKDIR build
 
 pushd build
 
-cl -Zi ..\src\main.cpp
+cl -Zi -W4 ..\src\main.cpp
 
 popd

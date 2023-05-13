@@ -49,8 +49,8 @@ enum RMField
 struct Inst_Operand
 {
     ModField mod; // Operation mode. May correspond to the number of displacement bytes.
-    RMField reg;
-    RMField rm;
+    RMField reg;  // Register or instruction index
+    RMField rm;   // Register index or memory adressing type
 };
 
 enum Disassembly_OperandType
@@ -65,6 +65,7 @@ struct Disassembly_Operand
 {
     Disassembly_OperandType type;
 
+    // TODO: Replace this with a pointer that's better for indexing into the CPU struct.
     RMField regmemIndex;
     ModField modField;
 
@@ -187,6 +188,7 @@ enum Disassembly_InstructionType
     DIS_LOCK,
     DIS_SEGMENT,
 
+    // NOTE: Always keep this at the end.
     DIS_NOOP
 };
 
