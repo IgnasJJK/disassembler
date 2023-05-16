@@ -207,24 +207,10 @@ struct Disassembly_Instruction
     Disassembly_InstructionType type;
     int operandCount;
 
-    // TODO: Remove unions when switchOperands is removed.
-    union
-    {
-        Disassembly_Operand operand1;
-        Disassembly_Operand opDest;
-    };
-    union
-    {
-        Disassembly_Operand operand2;
-        Disassembly_Operand opSrc;
-    };
+    Disassembly_Operand opDest;
+    Disassembly_Operand opSrc;
 
     bool isWide;
-
-    // TODO: It's not necessary to store the switchOperands flag in the instruction, because
-    // it only determines how the instruction would be written. The operation is sematically
-    // oriented only SRC -> DEST. (This can be done when parsing)
-    bool switchOperands;
 };
 
 Inst_Operand Inst_ParseOperand(u8 byte)

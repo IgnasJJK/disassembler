@@ -66,7 +66,7 @@ void LoadImmediateOperand(FILE* file, Disassembly_Operand* operand, bool wideOpe
         operand->valueLow = (i8)Load8BitValue(file);
         if ((operand->valueLow >> 7) & 0b1)
         {
-            operand->valueHigh = 0b11111111;
+            operand->valueHigh = 127i8;
         }
     }
     else if (wideOperation)
@@ -264,7 +264,7 @@ void PrintInstruction(Disassembly_Instruction* inst)
         case DIS_LOOPNZ:
         case DIS_JCXZ:
         {
-            i8 displacement = inst->operand1.valueLow;
+            i8 displacement = inst->opDest.valueLow;
             if (displacement >= 0)
             {
                 printf(" $+%d", displacement);
@@ -284,24 +284,24 @@ void PrintInstruction(Disassembly_Instruction* inst)
         case DIS_RCL:
         case DIS_RCR:
         {
-            PrintOperand(inst->operand1, inst->isWide);
+            PrintOperand(inst->opDest, inst->isWide);
             printf(", ");
-            PrintOperand(inst->operand2, false);
+            PrintOperand(inst->opSrc, false);
         }
         break;
 
         case DIS_IN:
         {
-            PrintOperand(inst->operand1, inst->isWide);
+            PrintOperand(inst->opDest, inst->isWide);
             printf(", ");
-            PrintOperand(inst->operand2, true);
+            PrintOperand(inst->opSrc, true);
         } 
         break;
         case DIS_OUT:
         {
-            PrintOperand(inst->operand2, true);
+            PrintOperand(inst->opDest, true);
             printf(", ");
-            PrintOperand(inst->operand1, inst->isWide);
+            PrintOperand(inst->opSrc, inst->isWide);
         }
         break;
 
@@ -309,22 +309,13 @@ void PrintInstruction(Disassembly_Instruction* inst)
         {
             if (inst->operandCount == 1)
             {
-                PrintOperand(inst->operand1, inst->isWide);
+                PrintOperand(inst->opDest, inst->isWide);
             }
             else if (inst->operandCount == 2)
             {
-                if (inst->switchOperands)
-                {
-                    PrintOperand(inst->operand2, inst->isWide);
-                    printf(", ");
-                    PrintOperand(inst->operand1, inst->isWide);
-                }
-                else
-                {
-                    PrintOperand(inst->operand1, inst->isWide);
-                    printf(", ");
-                    PrintOperand(inst->operand2, inst->isWide);
-                }
+                PrintOperand(inst->opDest, inst->isWide);
+                printf(", ");
+                PrintOperand(inst->opSrc, inst->isWide);
             }
 
         }
@@ -434,7 +425,8 @@ int main(int argc, char** argv)
     {
         char* fileName = argv[argc - 1];
 
-        FILE* file = fopen(fileName, "rb");
+        FILE* file;
+        fopen_s(&file, fileName, "rb"); // TODO: Handle returned error?
 
         if (file)
         {
@@ -460,7 +452,7 @@ int main(int argc, char** argv)
                 {
                     instruction.type = DIS_INT;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand(3);
+                    instruction.opDest = InitImmediateOperand(3);
                 }
                 else if (opcode == INST_INTO) instruction.type = DIS_INTO;
                 else if (opcode == INST_IRET) instruction.type = DIS_IRET;
@@ -511,14 +503,14 @@ int main(int argc, char** argv)
 
                     instruction.isWide = true;
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
+                    instruction.opDest = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.opSrc, instOperand.mod, instOperand.rm);
                 }
                 else if (opcode == INST_INT)
                 {
                     instruction.type = DIS_INT;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand(Load8BitValue(file));
+                    instruction.opDest = InitImmediateOperand(Load8BitValue(file));
                 }
                 else if (opcode == INST_MOV_REGMEM_SR || opcode == INST_MOV_SR_REGMEM)
                 {
@@ -555,14 +547,27 @@ int main(int argc, char** argv)
                 else if ((opcode & 0b11000100) == 0b00000000)
                 {
                     instruction.isWide = (opcode & 0b1);
-                    instruction.switchOperands = !((opcode >> 1) & 0b1);
                     instruction.type = instructionSubtypes[((opcode >> 3) & 0b111)];
-                    instruction.operandCount = 2;
 
+                    bool directionBit = (opcode >> 1) & 0b1;
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
-                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
+                    instruction.operandCount = 2;
+                    Disassembly_Operand *op1;
+                    Disassembly_Operand *op2;
+
+                    if (directionBit)
+                    {
+                        op1 = &instruction.opDest;
+                        op2 = &instruction.opSrc;
+                    }
+                    else
+                    {
+                        op2 = &instruction.opDest;
+                        op1 = &instruction.opSrc;
+                    }
+                    *op1 = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, op2, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & 0b11110000) == 0b01010000) // Push/pop register
                 {
@@ -572,7 +577,7 @@ int main(int argc, char** argv)
                     instruction.type = (isPop? DIS_POP : DIS_PUSH);
                     instruction.operandCount = 1;
                     instruction.isWide = true;
-                    instruction.operand1 = InitRegisterOperand(reg);
+                    instruction.opDest = InitRegisterOperand(reg);
                 }
                 else if ((opcode & 0b11100110) == 0b00000110) // Push/pop segment register
                 {
@@ -582,7 +587,7 @@ int main(int argc, char** argv)
                     instruction.type = (isPop? DIS_POP : DIS_PUSH);
                     instruction.operandCount = 1;
                     instruction.isWide = true;
-                    instruction.operand1 = InitSegmentRegisterOperand((RMField)segreg);
+                    instruction.opDest = InitSegmentRegisterOperand((RMField)segreg);
                 }
                 else if ((opcode & 0b11110100) == 0b11100100) // IN/OUT fixed port
                 {
@@ -590,20 +595,32 @@ int main(int argc, char** argv)
                     bool typeBit = ((opcode >> 1) & 0b1);
 
                     instruction.type = (typeBit? DIS_OUT : DIS_IN);
-                    instruction.switchOperands = (typeBit);
                     instruction.isWide = (opcode & 0b1);
 
                     // FIXME: Operands should be unsigned
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(REG_AX);
-
-                    if (variableBit)
+                    Disassembly_Operand* op1;
+                    Disassembly_Operand* op2;
+                    
+                    if (typeBit)
                     {
-                        instruction.operand2 = InitRegisterOperand(REG_DX);
+                        op2 = &instruction.opDest;
+                        op1 = &instruction.opSrc;
                     }
                     else
                     {
-                        LoadImmediateOperand(file, &instruction.operand2, false, false);
+                        op1 = &instruction.opDest;
+                        op2 = &instruction.opSrc;
+                    }
+
+                    *op1 = InitRegisterOperand(REG_AX);
+                    if (variableBit)
+                    {
+                        *op2 = InitRegisterOperand(REG_DX);
+                    }
+                    else
+                    {
+                        LoadImmediateOperand(file, op2, false, false);
                     }
                 }
                 else if ((opcode & 0b11111100) == (0b10000100))
@@ -614,30 +631,30 @@ int main(int argc, char** argv)
                     Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.operand2, instOperand.mod, instOperand.rm);
+                    instruction.opDest = InitRegisterOperand(instOperand.reg);
+                    LoadMemoryOperand(file, &instruction.opSrc, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_XCHG_ACC_WITH_REG)
                 {
                     instruction.type = DIS_XCHG;
                     instruction.operandCount = 2;
                     instruction.isWide = true;
-                    instruction.operand1 = InitRegisterOperand(REG_AX);
-                    instruction.operand2 = InitRegisterOperand((RMField)(opcode & 0b111));
+                    instruction.opDest = InitRegisterOperand(REG_AX);
+                    instruction.opSrc = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_INC_REG)
                 {
                     instruction.type = DIS_INC;
                     instruction.isWide = true;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
+                    instruction.opDest = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_DEC_REG)
                 {
                     instruction.type = DIS_DEC;
                     instruction.isWide = true;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
+                    instruction.opDest = InitRegisterOperand((RMField)(opcode & 0b111));
                 }
                 else if ((opcode & 0b11000100) == 0b00000100) // Immediate to accumulator
                 {
@@ -646,8 +663,8 @@ int main(int argc, char** argv)
                     instruction.type = instructionSubtypes[instructionType];
 
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(REG_AX); // Same ID as REG_AL
-                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                    instruction.opDest = InitRegisterOperand(REG_AX); // Same ID as REG_AL
+                    LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11111100) == 0b10000000) // Immediate to register/memory
                 {
@@ -660,9 +677,9 @@ int main(int argc, char** argv)
                     instruction.type = instructionSubtypes[instructionOperand.reg];
 
                     instruction.operandCount = 2;
-                    instruction.operand1.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.operand1, instructionOperand.mod, instructionOperand.rm);
-                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, signBit);
+                    instruction.opDest.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand.mod, instructionOperand.rm);
+                    LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, signBit);
                 }
                 else if ((opcode & 0b11111100) == 0b11010000) // Logic operations
                 {
@@ -673,17 +690,17 @@ int main(int argc, char** argv)
                     instruction.isWide = (opcode & 0b1);
 
                     instruction.operandCount = 2;
-                    instruction.operand1.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
+                    instruction.opDest.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
 
                     bool shiftByCLValue = ((opcode >> 1) & 0b1);
                     if (shiftByCLValue)
                     {
-                        instruction.operand2 = InitRegisterOperand(REG_CX);
+                        instruction.opSrc = InitRegisterOperand(REG_CX);
                     }
                     else
                     {
-                        instruction.operand2 = InitImmediateOperand(1);
+                        instruction.opSrc = InitImmediateOperand(1);
                     }
                 }
                 else if ((opcode & 0b11111110) == 0b11000110) // MOVE immediate to register/memory
@@ -696,9 +713,9 @@ int main(int argc, char** argv)
                     Assert(instOperand.reg == 0b000);// NOTE: Other reg values are not used. 
 
                     instruction.operandCount = 2;
-                    instruction.operand2.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.operand1, instOperand.mod, instOperand.rm);
-                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                    instruction.opSrc.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.opDest, instOperand.mod, instOperand.rm);
+                    LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11111100) == 0b10001000)
                 {
@@ -714,13 +731,13 @@ int main(int argc, char** argv)
                     Disassembly_Operand* op2;
                     if (switchOperands)
                     {
-                        op1 = &instruction.operand1;
-                        op2 = &instruction.operand2;
+                        op1 = &instruction.opDest;
+                        op2 = &instruction.opSrc;
                     }
                     else
                     {
-                        op1 = &instruction.operand2;
-                        op2 = &instruction.operand1;
+                        op1 = &instruction.opSrc;
+                        op2 = &instruction.opDest;
                     }
                     *op1 = InitRegisterOperand(instOperand.reg);
                     LoadMemoryOperand(file, op2, instOperand.mod, instOperand.rm);
@@ -729,28 +746,42 @@ int main(int argc, char** argv)
                 {
                     // NOTE: The direction bit here has opposite meaning to the standard one, and it's written as 2 separate commands in the manual.
                     instruction.type = DIS_MOV;
-                    instruction.switchOperands = ((opcode >> 1) & 0b1);
+                    bool directionBit = ((opcode >> 1) & 0b1);
                     instruction.isWide = (opcode & 0b1);
 
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(REG_AX);
-                    instruction.operand2.type = OP_MEMORY;
-                    instruction.operand2.regmemIndex = MEM_DIRECT;
-                    instruction.operand2.value = (i16)Load16BitValue(file);
+                    Disassembly_Operand* op1;
+                    Disassembly_Operand* op2;
+
+                    if (directionBit)
+                    {
+                        op2 = &instruction.opDest;
+                        op1 = &instruction.opSrc;
+                    }
+                    else
+                    {
+                        op1 = &instruction.opDest;
+                        op2 = &instruction.opSrc;
+                    }
+
+                    *op1 = InitRegisterOperand(REG_AX);
+                    op2->type = OP_MEMORY;
+                    op2->regmemIndex = MEM_DIRECT;
+                    op2->value = (i16)Load16BitValue(file);
                 }
                 else if (opcode == 0b11000010) // RET - within seg adding immediate to SP
                 {
                     instruction.type = DIS_RET;
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand((i16)Load16BitValue(file));
+                    instruction.opDest = InitImmediateOperand((i16)Load16BitValue(file));
                 }
                 else if ((opcode & 0b11110000) == 0b10110000) // MOV imm -> reg
                 {
                     instruction.type = DIS_MOV;
                     instruction.isWide = ((opcode >> 3) & 0b1);
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand((RMField)(opcode & 0b111));
-                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                    instruction.opDest = InitRegisterOperand((RMField)(opcode & 0b111));
+                    LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11110000) == 0b01110000)
                 {
@@ -764,7 +795,7 @@ int main(int argc, char** argv)
 
                     instruction.type = jumpSuptypes[jumpType];
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand(((i8)Load8BitValue(file) + 2));
+                    instruction.opDest = InitImmediateOperand(((i8)Load8BitValue(file) + 2));
                 }
                 else if ((opcode & 0b11111100) == 0b11100000)
                 {
@@ -772,7 +803,7 @@ int main(int argc, char** argv)
 
                     instruction.type = loopTypes[(opcode & 0b11)];
                     instruction.operandCount = 1;
-                    instruction.operand1 = InitImmediateOperand((i8)Load8BitValue(file) + 2);
+                    instruction.opDest = InitImmediateOperand((i8)Load8BitValue(file) + 2);
                 }
                 else if ((opcode & 0b11111111) == 0b10001111) // pop
                 {
@@ -782,8 +813,8 @@ int main(int argc, char** argv)
                     instruction.type = DIS_POP;
                     instruction.operandCount = 1;
                     instruction.isWide = true;
-                    instruction.operand1.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.operand1, instOperand.mod, instOperand.rm);
+                    instruction.opDest.outputWidth = true;
+                    LoadMemoryOperand(file, &instruction.opDest, instOperand.mod, instOperand.rm);
                 }
                 else if ((opcode & 0b11111110) == 0b11111110)
                 {
@@ -797,13 +828,13 @@ int main(int argc, char** argv)
                     instruction.type = instructionSubtypesInc[instructionOperand.reg];
 
                     instruction.operandCount = 1;
-                    LoadMemoryOperand(file, &instruction.operand1, instructionOperand.mod, instructionOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand.mod, instructionOperand.rm);
 
                     if (instructionOperand.reg == 0b110 || 
                         instructionOperand.reg == 0b000 || 
                         instructionOperand.reg == 0b001) // push/inc/dec
                     {
-                        instruction.operand1.outputWidth = true;
+                        instruction.opDest.outputWidth = true;
                     }
                 }
                 else if ((opcode & 0b11111110) == 0b10101000) // TEST imm, ax
@@ -811,8 +842,8 @@ int main(int argc, char** argv)
                     instruction.type = DIS_TEST;
                     instruction.isWide = (opcode & 0b1);
                     instruction.operandCount = 2;
-                    instruction.operand1 = InitRegisterOperand(REG_AX);
-                    LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                    instruction.opDest = InitRegisterOperand(REG_AX);
+                    LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11111110) == 0b11110110)
                 {
@@ -826,15 +857,15 @@ int main(int argc, char** argv)
                     if (operand.reg == 0b000)
                     {
                         instruction.operandCount = 2;
-                        LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
-                        instruction.operand1.outputWidth = true;
-                        LoadImmediateOperand(file, &instruction.operand2, instruction.isWide, false);
+                        LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
+                        instruction.opDest.outputWidth = true;
+                        LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                     }
                     else
                     {
                         instruction.operandCount = 1;
-                        instruction.operand1.outputWidth = true;
-                        LoadMemoryOperand(file, &instruction.operand1, operand.mod, operand.rm);
+                        instruction.opDest.outputWidth = true;
+                        LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
                     }
                 }
                 else
