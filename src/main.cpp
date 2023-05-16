@@ -5,6 +5,8 @@
 #include "common.cpp"
 #include "disassembly.cpp"
 
+#include "simulation.cpp"
+
 static char* const registers8bit[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
 static char* const registers16bit[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
 static char* const registersSegment[] = {"es", "cs", "ss", "ds"};
@@ -26,14 +28,14 @@ inline u16 Load16BitValue(FILE* file)
 /// @brief Loads memory 
 /// @param file handle to assembled file
 /// @param[out] operand output location for operand data
-void LoadMemoryOperand(FILE* file, Disassembly_Operand* operand, ModField mode, RMField regmemField)
+void LoadMemoryOperand(FILE* file, Operand* operand, OperandByte operandByte)
 {
     // TODO: This function changes the operand type for registers.
     // Maybe it should do the same with memory operands.
 
     operand->type = OP_MEMORY;
-    operand->modField = mode;
-    operand->regmemIndex = regmemField;
+    operand->modField = operandByte.mod;
+    operand->regmemIndex = operandByte.rm;
 
     switch (operand->modField)
     {
@@ -57,7 +59,7 @@ void LoadMemoryOperand(FILE* file, Disassembly_Operand* operand, ModField mode, 
 /// @param[out] operand operand to load value into
 /// @param wideOperation if true, 2 bytes are loaded. Otherwise - 1 byte.
 /// @param signExtend if true, loads 1 byte and sign extends it to 2 bytes
-void LoadImmediateOperand(FILE* file, Disassembly_Operand* operand, bool wideOperation, bool signExtend)
+void LoadImmediateOperand(FILE* file, Operand* operand, bool wideOperation, bool signExtend)
 {
     operand->type = OP_IMMEDIATE;
 
@@ -109,10 +111,8 @@ void PrintAddressOperand(char* effectiveAddress, i16 displacement)
     }
 }
 
-void PrintOperand(Disassembly_Operand operand, bool wideOperation)
+void PrintOperand(Operand operand, bool wideOperation)
 {
-    // STUDY: Check if register mode ever needs to have the width output
-
     switch (operand.type)
     {
         case OP_REGISTER:
@@ -133,7 +133,7 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
             {
                 printf(wideOperation? "word " : "byte ");
             }
-            printf("%d", (wideOperation? operand.value : operand.valueLow));
+            printf("%d", (wideOperation? (i16)operand.value : (i8)operand.valueLow));
         }
         break;
         case OP_MEMORY:
@@ -146,7 +146,7 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
             {
                 if (operand.regmemIndex == MEM_DIRECT)
                 {
-                    printf("[%d]", operand.value);
+                    printf("[%d]", (i16)operand.value);
                 }
                 else
                 {
@@ -155,11 +155,11 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
             }
             else if (operand.modField == MEMORY_8BIT_MODE)
             {
-                PrintAddressOperand(effectiveAddressTable[operand.regmemIndex], operand.valueLow);
+                PrintAddressOperand(effectiveAddressTable[operand.regmemIndex], (i8)operand.valueLow);
             }
             else if (operand.modField == MEMORY_16BIT_MODE)
             {
-                PrintAddressOperand(effectiveAddressTable[operand.regmemIndex], operand.value);
+                PrintAddressOperand(effectiveAddressTable[operand.regmemIndex], (i16)operand.value);
             }
             else
             {
@@ -170,71 +170,7 @@ void PrintOperand(Disassembly_Operand operand, bool wideOperation)
     }
 }
 
-#define MASK_INST_1BYTE_REG 0b11111000
-enum Inst_1ByteRegisterInstructions
-{
-    INST_INC_REG           = 0b01000000,
-    INST_DEC_REG           = 0b01001000,
-    INST_PUSH_REG          = 0b01010000,
-    INST_POP_REG           = 0b01011000,
-    INST_XCHG_ACC_WITH_REG = 0b10010000,
-    INST_MOV_IMM_TO_REG    = 0b10110000,
-    INST_MOV_IMM_TO_REG_W  = 0b10111000,
-};
-
-enum Inst_1Byte
-{
-    INST_DAA   = 0b00100111,
-    INST_DAS   = 0b00101111,
-    INST_AAA   = 0b00110111,
-    INST_AAS   = 0b00111111,
-
-    INST_CBW   = 0b10011000,
-    INST_CWD   = 0b10011001,
-
-    INST_PUSHF = 0b10011100,
-    INST_POPF  = 0b10011101,
-    INST_SAHF  = 0b10011110,
-    INST_LAHF  = 0b10011111,
-
-    INST_XLAT  = 0b11010111,
-
-    INST_INT3  = 0b11001100, // Interrupt 3
-    INST_INT   = 0b11001101, // Interrupt (specified)
-    INST_INTO  = 0b11001110, // Interrupt on overflow
-    INST_IRET  = 0b11001111, // Interrupt return
-
-    INST_AAM   = 0b11010100,
-    INST_AAD   = 0b11010101,
-
-    INST_CLC   = 0b11111000, // Clear carry
-    INST_CMC   = 0b11110101, // Complement carry
-    INST_STC   = 0b11111001, // Set carry
-    INST_CLD   = 0b11111100, // Clear direction
-    INST_STD   = 0b11111101, // Set direction
-    INST_CLI   = 0b11111010, // Clear interrupt
-    INST_STI   = 0b11111011, // Set interrupt
-    INST_HLT   = 0b11110100, // Halt
-    INST_WAIT  = 0b10011011, // Wait
-    INST_LOCK  = 0b11110000, // Bus lock prefix
-
-
-    // TODO: Find definitions
-    INST_RET_WITHIN_SEGMENT   = 0b11000011,
-    INST_RET_INTERSEGMENT  = 0b11001011,
-
-    //
-
-    INST_LEA = 0b10001101,
-    INST_LDS = 0b11000101,
-    INST_LES = 0b11000100,
-
-    // MOV with segment registers
-    INST_MOV_REGMEM_SR = 0b10001110,
-    INST_MOV_SR_REGMEM = 0b10001100
-};
-
-void PrintInstruction(Disassembly_Instruction* inst)
+void PrintInstruction(Instruction* inst)
 {
     Assert(inst->operandCount >= 0 && inst->operandCount <= 2);
 
@@ -323,64 +259,6 @@ void PrintInstruction(Disassembly_Instruction* inst)
     }
 }
 
-struct CPU 
-{
-    // Registers
-
-    union
-    {
-        u16 reg16[8];
-        struct { u16 ax, cx, dx, bx, sp, bp, si, di; };
-
-        u8  reg8[16];
-        struct { u8 al, ah, cl, ch, dl, dh, bl, bh; };
-    };
-
-    // Segment registers
-    union
-    {
-        u16 regseg[4];
-        struct { u16 es, cs, ss, ds; };
-    };
-
-    void* GetPointerToRegister(Disassembly_Operand* op, bool wide)
-    {
-        Assert(op->type == OP_REGISTER || op->type == OP_SEGMENT_REGISTER);
-
-        if (op->type == OP_REGISTER)
-        {
-            Assert((int)op->regmemIndex < 8)
-
-            if (wide) 
-                return &reg16[op->regmemIndex];
-
-            switch (op->regmemIndex)
-            {
-                case REG_AL: return &al;
-                case REG_AH: return &ah;
-                case REG_CL: return &cl;
-                case REG_CH: return &ch;
-                case REG_DL: return &dl;
-                case REG_DH: return &dh;
-                case REG_BL: return &bl;
-                case REG_BH: return &bh;
-                default:
-                    Assert(false);
-                    return nullptr;
-            }
-        }
-        else if (op->type == OP_SEGMENT_REGISTER)
-        {
-            Assert((int)op->regmemIndex < 4);
-
-            return &regseg[op->regmemIndex];
-        }
-        else
-        {
-            return nullptr;
-        }
-    }
-};
 
 void PrintBinary(u16 value)
 {
@@ -395,9 +273,53 @@ void PrintBinary(u16 value)
     }
 }
 
+bool DecodeSingleByteInstruction(u8 opcode, Instruction* instruction)
+{
+    switch (opcode)
+    {
+        case INST_XLAT:  instruction->type = DIS_XLAT; break;
+        case INST_DAA:   instruction->type = DIS_DAA; break;
+        case INST_AAA:   instruction->type = DIS_AAA; break;
+        case INST_AAS:   instruction->type = DIS_AAS; break;
+        case INST_DAS:   instruction->type = DIS_DAS; break;
+        case INST_CBW:   instruction->type = DIS_CBW; break;
+        case INST_CWD:   instruction->type = DIS_CWD; break;
+        case INST_INTO:  instruction->type = DIS_INTO; break;
+        case INST_IRET:  instruction->type = DIS_IRET; break;
+        case INST_CLC:   instruction->type = DIS_CLC; break;
+        case INST_CMC:   instruction->type = DIS_CMC; break;
+        case INST_STC:   instruction->type = DIS_STC; break;
+        case INST_CLD:   instruction->type = DIS_CLD; break;
+        case INST_STD:   instruction->type = DIS_STD; break;
+        case INST_CLI:   instruction->type = DIS_CLI; break;
+        case INST_STI:   instruction->type = DIS_STI; break;
+        case INST_HLT:   instruction->type = DIS_HLT; break;
+        case INST_WAIT:  instruction->type = DIS_WAIT; break;
+        case INST_PUSHF: instruction->type = DIS_PUSHF; break;
+        case INST_POPF:  instruction->type = DIS_POPF; break;
+        case INST_SAHF:  instruction->type = DIS_SAHF; break;
+        case INST_LAHF:  instruction->type = DIS_LAHF; break;
+        case INST_LOCK:  instruction->type = DIS_LOCK; break;
+
+        case INST_INT3:
+            instruction->type = DIS_INT;
+            instruction->operandCount = 1;
+            instruction->opDest = InitImmediateOperand(3);
+            break;
+
+        case INST_RET_INTERSEGMENT: 
+        case INST_RET_WITHIN_SEGMENT: 
+            instruction->type = DIS_RET; 
+            break;
+        
+        default: return false;
+    }
+    return true;
+}
+
 int main(int argc, char** argv)
 {
-    Disassembly_InstructionType instructionSubtypes[] = {
+    InstructionType instructionSubtypes[] = {
         DIS_ADD, DIS_OR, DIS_ADC, DIS_SBB, DIS_AND, DIS_SUB, DIS_XOR, DIS_CMP
     };
 
@@ -414,17 +336,12 @@ int main(int argc, char** argv)
             {
                 execute = true;
             }
-            else
-            {
-                // TODO: Error logging?
-            }
         }
     }
 
     if (argc >= 2)
     {
         char* fileName = argv[argc - 1];
-
         FILE* file;
         fopen_s(&file, fileName, "rb"); // TODO: Handle returned error?
 
@@ -439,43 +356,12 @@ int main(int argc, char** argv)
             {
                 u8 opcode = (u8)input;
 
-                Disassembly_Instruction instruction {0};
+                Instruction instruction {0};
 
-                if (opcode == INST_XLAT) instruction.type = DIS_XLAT;
-                else if (opcode == INST_DAA) instruction.type = DIS_DAA;
-                else if (opcode == INST_AAA) instruction.type = DIS_AAA;
-                else if (opcode == INST_AAS) instruction.type = DIS_AAS;
-                else if (opcode == INST_DAS) instruction.type = DIS_DAS;
-                else if (opcode == INST_CBW) instruction.type = DIS_CBW;
-                else if (opcode == INST_CWD) instruction.type = DIS_CWD;
-                else if (opcode == INST_INT3) 
+                if (DecodeSingleByteInstruction(opcode, &instruction))
                 {
-                    instruction.type = DIS_INT;
-                    instruction.operandCount = 1;
-                    instruction.opDest = InitImmediateOperand(3);
+                    // Success
                 }
-                else if (opcode == INST_INTO) instruction.type = DIS_INTO;
-                else if (opcode == INST_IRET) instruction.type = DIS_IRET;
-                else if (opcode == INST_CLC) instruction.type = DIS_CLC;
-                else if (opcode == INST_CMC) instruction.type = DIS_CMC;
-                else if (opcode == INST_STC) instruction.type = DIS_STC;
-                else if (opcode == INST_CLD) instruction.type = DIS_CLD;
-                else if (opcode == INST_STD) instruction.type = DIS_STD;
-                else if (opcode == INST_CLI) instruction.type = DIS_CLI;
-                else if (opcode == INST_STI) instruction.type = DIS_STI;
-                else if (opcode == INST_HLT) instruction.type = DIS_HLT;
-                else if (opcode == INST_WAIT) instruction.type = DIS_WAIT;
-                else if (opcode == INST_PUSHF) instruction.type = DIS_PUSHF;
-                else if (opcode == INST_POPF) instruction.type = DIS_POPF;
-                else if (opcode == INST_SAHF) instruction.type = DIS_SAHF;
-                else if (opcode == INST_LAHF) instruction.type = DIS_LAHF;
-                else if (opcode == INST_LOCK)
-                {
-                    instruction.type = DIS_LOCK;
-                }
-                // FIXME: Probably inaccurate ret instructions
-                else if (opcode == INST_RET_INTERSEGMENT) instruction.type = DIS_RET; //printf("ret ; intersegment");
-                else if (opcode == INST_RET_WITHIN_SEGMENT) instruction.type = DIS_RET; // printf("ret ; within segment");
                 else if (opcode == INST_AAM) // AAM
                 {
                     Load8BitValue(file);
@@ -492,7 +378,7 @@ int main(int argc, char** argv)
                 }
                 else if (opcode == INST_LEA || opcode == INST_LDS || opcode == INST_LES)
                 {
-                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     if (opcode == INST_LEA)
                         instruction.type = DIS_LEA;
@@ -504,7 +390,7 @@ int main(int argc, char** argv)
                     instruction.isWide = true;
                     instruction.operandCount = 2;
                     instruction.opDest = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.opSrc, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opSrc, instOperand);
                 }
                 else if (opcode == INST_INT)
                 {
@@ -514,15 +400,15 @@ int main(int argc, char** argv)
                 }
                 else if (opcode == INST_MOV_REGMEM_SR || opcode == INST_MOV_SR_REGMEM)
                 {
-                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte operand = Inst_ParseOperand(Load8BitValue(file));
                     instruction.type = DIS_MOV;
                     instruction.operandCount = 2;
                     instruction.isWide = true;
 
                     bool toSegmentRegister = ((opcode >> 1) & 0b1);
 
-                    Disassembly_Operand* segment;
-                    Disassembly_Operand* regmem;
+                    Operand* segment;
+                    Operand* regmem;
                     if (toSegmentRegister)
                     {
                         segment = &instruction.opDest;
@@ -536,7 +422,7 @@ int main(int argc, char** argv)
 
                     segment->type = OP_SEGMENT_REGISTER;
                     segment->regmemIndex = operand.reg;
-                    LoadMemoryOperand(file, regmem, operand.mod, operand.rm);
+                    LoadMemoryOperand(file, regmem, operand);
                 }
                 else if ((opcode & 0b11111110) == 0b11110010) instruction.type = DIS_REP;
                 else if ((opcode & 0b11111110) == 0b10100100) instruction.type = (opcode & 0b1) ? DIS_MOVSW : DIS_MOVSB;
@@ -550,11 +436,11 @@ int main(int argc, char** argv)
                     instruction.type = instructionSubtypes[((opcode >> 3) & 0b111)];
 
                     bool directionBit = (opcode >> 1) & 0b1;
-                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.operandCount = 2;
-                    Disassembly_Operand *op1;
-                    Disassembly_Operand *op2;
+                    Operand *op1;
+                    Operand *op2;
 
                     if (directionBit)
                     {
@@ -567,7 +453,7 @@ int main(int argc, char** argv)
                         op1 = &instruction.opSrc;
                     }
                     *op1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, op2, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, op2, instOperand);
                 }
                 else if ((opcode & 0b11110000) == 0b01010000) // Push/pop register
                 {
@@ -599,8 +485,8 @@ int main(int argc, char** argv)
 
                     // FIXME: Operands should be unsigned
                     instruction.operandCount = 2;
-                    Disassembly_Operand* op1;
-                    Disassembly_Operand* op2;
+                    Operand* op1;
+                    Operand* op2;
                     
                     if (typeBit)
                     {
@@ -628,11 +514,11 @@ int main(int argc, char** argv)
                     instruction.isWide = (opcode & 0b1);
                     instruction.type = ((opcode >> 1) & 0b1) ? DIS_XCHG : DIS_TEST;
 
-                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.operandCount = 2;
                     instruction.opDest = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, &instruction.opSrc, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opSrc, instOperand);
                 }
                 else if ((opcode & MASK_INST_1BYTE_REG) == INST_XCHG_ACC_WITH_REG)
                 {
@@ -671,27 +557,27 @@ int main(int argc, char** argv)
                     bool signBit = ((opcode >> 1) & 0b1);
                     instruction.isWide = (opcode & 0b1);
 
-                    Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instructionOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     // NOTE: For immediate instructions, the REG part of the operand byte determines the operation type.
                     instruction.type = instructionSubtypes[instructionOperand.reg];
 
                     instruction.operandCount = 2;
                     instruction.opDest.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand.mod, instructionOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand);
                     LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, signBit);
                 }
                 else if ((opcode & 0b11111100) == 0b11010000) // Logic operations
                 {
-                    Disassembly_InstructionType logicSubtypes[] = {DIS_ROL, DIS_ROR, DIS_RCL, DIS_RCR, DIS_SHL, DIS_SHR, DIS_NOOP, DIS_SAR};
-                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+                    InstructionType logicSubtypes[] = {DIS_ROL, DIS_ROR, DIS_RCL, DIS_RCR, DIS_SHL, DIS_SHR, DIS_NOOP, DIS_SAR};
+                    OperandByte operand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.type = logicSubtypes[operand.reg];
                     instruction.isWide = (opcode & 0b1);
 
                     instruction.operandCount = 2;
                     instruction.opDest.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, operand);
 
                     bool shiftByCLValue = ((opcode >> 1) & 0b1);
                     if (shiftByCLValue)
@@ -708,13 +594,13 @@ int main(int argc, char** argv)
                     instruction.type = DIS_MOV;
                     instruction.isWide = (opcode & 0b1);
 
-                    Inst_Operand instOperand = Inst_ParseOperand((u8)Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand((u8)Load8BitValue(file));
 
                     Assert(instOperand.reg == 0b000);// NOTE: Other reg values are not used. 
 
                     instruction.operandCount = 2;
                     instruction.opSrc.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.opDest, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, instOperand);
                     LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                 }
                 else if ((opcode & 0b11111100) == 0b10001000)
@@ -723,12 +609,12 @@ int main(int argc, char** argv)
                     instruction.isWide = (opcode & 0b1);
                     bool switchOperands = ((opcode >> 1) & 0b1);
 
-                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.operandCount = 2;
 
-                    Disassembly_Operand* op1;
-                    Disassembly_Operand* op2;
+                    Operand* op1;
+                    Operand* op2;
                     if (switchOperands)
                     {
                         op1 = &instruction.opDest;
@@ -740,7 +626,7 @@ int main(int argc, char** argv)
                         op2 = &instruction.opDest;
                     }
                     *op1 = InitRegisterOperand(instOperand.reg);
-                    LoadMemoryOperand(file, op2, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, op2, instOperand);
                 }
                 else if ((opcode & 0b11111100) == 0b10100000) // MOV accumulator-memory
                 {
@@ -750,8 +636,8 @@ int main(int argc, char** argv)
                     instruction.isWide = (opcode & 0b1);
 
                     instruction.operandCount = 2;
-                    Disassembly_Operand* op1;
-                    Disassembly_Operand* op2;
+                    Operand* op1;
+                    Operand* op2;
 
                     if (directionBit)
                     {
@@ -785,7 +671,7 @@ int main(int argc, char** argv)
                 }
                 else if ((opcode & 0b11110000) == 0b01110000)
                 {
-                    Disassembly_InstructionType jumpSuptypes[] = {
+                    InstructionType jumpSuptypes[] = {
                         DIS_JO, DIS_JNO, DIS_JB, DIS_JNB, DIS_JE, DIS_JNE, DIS_JBE, DIS_JNBE,
                         DIS_JS, DIS_JNS, DIS_JP, DIS_JNP, DIS_JL, DIS_JNL, DIS_JLE, DIS_JNLE
                     };
@@ -799,7 +685,7 @@ int main(int argc, char** argv)
                 }
                 else if ((opcode & 0b11111100) == 0b11100000)
                 {
-                    Disassembly_InstructionType loopTypes[] = { DIS_LOOPNZ, DIS_LOOPZ, DIS_LOOP, DIS_JCXZ};
+                    InstructionType loopTypes[] = { DIS_LOOPNZ, DIS_LOOPZ, DIS_LOOP, DIS_JCXZ};
 
                     instruction.type = loopTypes[(opcode & 0b11)];
                     instruction.operandCount = 1;
@@ -807,20 +693,20 @@ int main(int argc, char** argv)
                 }
                 else if ((opcode & 0b11111111) == 0b10001111) // pop
                 {
-                    Inst_Operand instOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instOperand = Inst_ParseOperand(Load8BitValue(file));
                     Assert(instOperand.reg == 0b000); // NOTE: Other values are not used.
                     
                     instruction.type = DIS_POP;
                     instruction.operandCount = 1;
                     instruction.isWide = true;
                     instruction.opDest.outputWidth = true;
-                    LoadMemoryOperand(file, &instruction.opDest, instOperand.mod, instOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, instOperand);
                 }
                 else if ((opcode & 0b11111110) == 0b11111110)
                 {
-                    Disassembly_InstructionType instructionSubtypesInc[] = {DIS_INC, DIS_DEC, DIS_CALL, DIS_CALL, DIS_JMP, DIS_JMP, DIS_PUSH};
+                    InstructionType instructionSubtypesInc[] = {DIS_INC, DIS_DEC, DIS_CALL, DIS_CALL, DIS_JMP, DIS_JMP, DIS_PUSH};
 
-                    Inst_Operand instructionOperand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte instructionOperand = Inst_ParseOperand(Load8BitValue(file));
 
                     Assert(instructionOperand.reg != 0b111);
 
@@ -828,7 +714,7 @@ int main(int argc, char** argv)
                     instruction.type = instructionSubtypesInc[instructionOperand.reg];
 
                     instruction.operandCount = 1;
-                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand.mod, instructionOperand.rm);
+                    LoadMemoryOperand(file, &instruction.opDest, instructionOperand);
 
                     if (instructionOperand.reg == 0b110 || 
                         instructionOperand.reg == 0b000 || 
@@ -847,9 +733,9 @@ int main(int argc, char** argv)
                 }
                 else if ((opcode & 0b11111110) == 0b11110110)
                 {
-                    Disassembly_InstructionType types[] = {DIS_TEST, DIS_NOOP, DIS_NOT, DIS_NEG, DIS_MUL, DIS_IMUL, DIS_DIV, DIS_IDIV};
+                    InstructionType types[] = {DIS_TEST, DIS_NOOP, DIS_NOT, DIS_NEG, DIS_MUL, DIS_IMUL, DIS_DIV, DIS_IDIV};
 
-                    Inst_Operand operand = Inst_ParseOperand(Load8BitValue(file));
+                    OperandByte operand = Inst_ParseOperand(Load8BitValue(file));
 
                     instruction.type = types[operand.reg];
                     instruction.isWide = (opcode & 0b1);
@@ -857,7 +743,7 @@ int main(int argc, char** argv)
                     if (operand.reg == 0b000)
                     {
                         instruction.operandCount = 2;
-                        LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
+                        LoadMemoryOperand(file, &instruction.opDest, operand);
                         instruction.opDest.outputWidth = true;
                         LoadImmediateOperand(file, &instruction.opSrc, instruction.isWide, false);
                     }
@@ -865,7 +751,7 @@ int main(int argc, char** argv)
                     {
                         instruction.operandCount = 1;
                         instruction.opDest.outputWidth = true;
-                        LoadMemoryOperand(file, &instruction.opDest, operand.mod, operand.rm);
+                        LoadMemoryOperand(file, &instruction.opDest, operand);
                     }
                 }
                 else
@@ -936,6 +822,252 @@ int main(int argc, char** argv)
                             }
                         }
                         break;
+                        case DIS_ADD:
+                        {
+                            if ((instruction.opSrc.type == OP_REGISTER || instruction.opSrc.type == OP_SEGMENT_REGISTER) &&
+                                (instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER))
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+                                void* src  = cpu.GetPointerToRegister(&instruction.opSrc, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* src16  = (u16*)src;
+                                    u16* dest16 = (u16*)dest;
+
+                                    *dest16 += *src16;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers16bit[instruction.opDest.regmemIndex]), 
+                                        *dest16, *dest16);
+                                    
+                                    printf(" | Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*dest16 == 0); 
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8 operand = *((u8*)src);
+                                    u8* dest8 = ((u8*)dest);
+                                    
+                                    *dest8 += operand;
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers8bit[instruction.opDest.regmemIndex]), 
+                                        *dest8, *dest8);
+
+                                    printf(" | Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*dest8 == 0);
+                                    printf("->"); PrintFlags(cpu);
+                                }
+
+                            }
+                            else if ((instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER)
+                                && instruction.opSrc.type == OP_IMMEDIATE)
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* dest16 = (u16*)dest;
+
+                                    *dest16 += instruction.opSrc.value;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers16bit[instruction.opDest.regmemIndex]), 
+                                        *dest16, *dest16);
+                                    
+                                    printf(" | Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*dest16 == 0); 
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8* dest8 = ((u8*)dest);
+                                    
+                                    *dest8 += instruction.opSrc.valueLow;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers8bit[instruction.opDest.regmemIndex]), 
+                                        *dest8, *dest8);
+
+                                    printf(" | Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*dest8 == 0);
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                            }
+                            else
+                            {
+                                printf(" ; ADD - not implemented");
+                            }
+                        }
+                        break;
+                        case DIS_SUB:
+                        {
+                            if ((instruction.opSrc.type == OP_REGISTER || instruction.opSrc.type == OP_SEGMENT_REGISTER) &&
+                                (instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER))
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+                                void* src  = cpu.GetPointerToRegister(&instruction.opSrc, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* src16  = (u16*)src;
+                                    u16* dest16 = (u16*)dest;
+
+                                    *dest16 -= *src16;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers16bit[instruction.opDest.regmemIndex]), 
+                                        *dest16, *dest16);
+                                    
+                                    printf(" | Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*dest16 == 0); 
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8 operand = *((u8*)src);
+                                    u8* dest8 = ((u8*)dest);
+                                    
+                                    *dest8 -= operand;
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers8bit[instruction.opDest.regmemIndex]), 
+                                        *dest8, *dest8);
+
+                                    printf(" | Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*dest8 == 0);
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                            }
+                            else if ((instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER)
+                                && instruction.opSrc.type == OP_IMMEDIATE)
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* dest16 = (u16*)dest;
+
+                                    *dest16 -= instruction.opSrc.value;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers16bit[instruction.opDest.regmemIndex]), 
+                                        *dest16, *dest16);
+                                    
+                                    printf(" | Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*dest16 == 0); 
+                                    cpu.parity = 0;
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8* dest8 = ((u8*)dest);
+                                    
+                                    *dest8 -= instruction.opSrc.valueLow;
+
+                                    printf("; %s -> %d (0x%x)", 
+                                        ((instruction.opDest.type == OP_SEGMENT_REGISTER) ? 
+                                            registersSegment[instruction.opDest.regmemIndex] : 
+                                            registers8bit[instruction.opDest.regmemIndex]), 
+                                        *dest8, *dest8);
+
+                                    printf(" | Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*dest8 == 0);
+                                    cpu.parity = 0;
+                                    printf("->"); PrintFlags(cpu);
+                                }
+
+                            }
+                            else
+                            {
+                                printf(" ; SUB - not implemented");
+                            }
+                        }
+                        break;
+                        case DIS_CMP:
+                        {
+                            if ((instruction.opSrc.type == OP_REGISTER || instruction.opSrc.type == OP_SEGMENT_REGISTER) &&
+                                (instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER))
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+                                void* src  = cpu.GetPointerToRegister(&instruction.opSrc, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* src16  = (u16*)src;
+                                    u16* dest16 = (u16*)dest;
+
+                                    printf("; Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*src16 == *dest16);
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8* src8 = ((u8*)src);
+                                    u8* dest8 = ((u8*)dest);
+                                    
+                                    printf("; Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*src8 == *dest8);
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                            }
+                            else if ((instruction.opDest.type == OP_REGISTER || instruction.opDest.type == OP_SEGMENT_REGISTER)
+                                && instruction.opSrc.type == OP_IMMEDIATE)
+                            {
+                                void* dest = cpu.GetPointerToRegister(&instruction.opDest, instruction.isWide);
+
+                                if (instruction.isWide)
+                                {
+                                    u16* dest16 = (u16*)dest;
+                                    
+                                    printf("; Flags: "); PrintFlags(cpu); 
+                                    cpu.sign = (*dest16 & 0x8000) >> 15;
+                                    cpu.zero = (*dest16 == instruction.opSrc.value); 
+                                    cpu.parity = 0;
+                                    printf("->"); PrintFlags(cpu);
+                                }
+                                else
+                                {
+                                    u8* dest8 = ((u8*)dest);
+
+                                    printf("; Flags: "); PrintFlags(cpu);
+                                    cpu.sign = (*dest8 & 0x80) >> 7;
+                                    cpu.zero = (*dest8 == instruction.opSrc.valueLow);
+                                    cpu.parity = 0;
+                                    printf("->"); PrintFlags(cpu);
+                                }
+
+                            }
+                            else
+                            {
+                                printf(" ; CMP - not implemented");
+                            }
+                        }
+                        break;
                         default:
                             printf(" ; not implemented");
                         break;
@@ -965,6 +1097,8 @@ int main(int argc, char** argv)
                 printf("; CS: 0x%x (%d)\n", cpu.cs, cpu.cs);
                 printf("; SS: 0x%x (%d)\n", cpu.ss, cpu.ss);
                 printf("; DS: 0x%x (%d)\n", cpu.ds, cpu.ds);
+                printf("\n");
+                printf("; Flags: "); PrintFlags(cpu); printf("\n");
             }
         }
         else

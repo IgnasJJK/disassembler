@@ -1,5 +1,69 @@
 #include "common.cpp"
 
+enum Inst_1Byte
+{
+    INST_DAA   = 0b00100111,
+    INST_DAS   = 0b00101111,
+    INST_AAA   = 0b00110111,
+    INST_AAS   = 0b00111111,
+
+    INST_CBW   = 0b10011000,
+    INST_CWD   = 0b10011001,
+
+    INST_PUSHF = 0b10011100,
+    INST_POPF  = 0b10011101,
+    INST_SAHF  = 0b10011110,
+    INST_LAHF  = 0b10011111,
+
+    INST_XLAT  = 0b11010111,
+
+    INST_INT3  = 0b11001100, // Interrupt 3
+    INST_INT   = 0b11001101, // Interrupt (specified)
+    INST_INTO  = 0b11001110, // Interrupt on overflow
+    INST_IRET  = 0b11001111, // Interrupt return
+
+    INST_AAM   = 0b11010100,
+    INST_AAD   = 0b11010101,
+
+    INST_CLC   = 0b11111000, // Clear carry
+    INST_CMC   = 0b11110101, // Complement carry
+    INST_STC   = 0b11111001, // Set carry
+    INST_CLD   = 0b11111100, // Clear direction
+    INST_STD   = 0b11111101, // Set direction
+    INST_CLI   = 0b11111010, // Clear interrupt
+    INST_STI   = 0b11111011, // Set interrupt
+    INST_HLT   = 0b11110100, // Halt
+    INST_WAIT  = 0b10011011, // Wait
+    INST_LOCK  = 0b11110000, // Bus lock prefix
+
+
+    // TODO: Find definitions
+    INST_RET_WITHIN_SEGMENT   = 0b11000011,
+    INST_RET_INTERSEGMENT  = 0b11001011,
+
+    //
+
+    INST_LEA = 0b10001101,
+    INST_LDS = 0b11000101,
+    INST_LES = 0b11000100,
+
+    // MOV with segment registers
+    INST_MOV_REGMEM_SR = 0b10001110,
+    INST_MOV_SR_REGMEM = 0b10001100
+};
+
+#define MASK_INST_1BYTE_REG 0b11111000
+enum Inst_1ByteRegisterInstructions
+{
+    INST_INC_REG           = 0b01000000,
+    INST_DEC_REG           = 0b01001000,
+    INST_PUSH_REG          = 0b01010000,
+    INST_POP_REG           = 0b01011000,
+    INST_XCHG_ACC_WITH_REG = 0b10010000,
+    INST_MOV_IMM_TO_REG    = 0b10110000,
+    INST_MOV_IMM_TO_REG_W  = 0b10111000,
+};
+
 enum ModField
 {
     MEMORY_0BIT_MODE,
@@ -46,14 +110,21 @@ enum RMField
 #define MEM_DIRECT MEM_BP
 };
 
-struct Inst_Operand
+struct OperandByte
 {
-    ModField mod; // Operation mode. May correspond to the number of displacement bytes.
-    RMField reg;  // Register or instruction index
-    RMField rm;   // Register index or memory adressing type
+    union
+    {
+        u8 value;
+        struct
+        {
+            ModField mod; // Operation mode. May correspond to the number of displacement bytes.
+            RMField reg;  // Register or instruction index
+            RMField rm;   // Register index or memory adressing type
+        };
+    };
 };
 
-enum Disassembly_OperandType
+enum OperandType
 {
     OP_IMMEDIATE,
     OP_MEMORY,
@@ -61,9 +132,9 @@ enum Disassembly_OperandType
     OP_SEGMENT_REGISTER
 };
 
-struct Disassembly_Operand
+struct Operand
 {
-    Disassembly_OperandType type;
+    OperandType type;
 
     // TODO: Replace this with a pointer that's better for indexing into the CPU struct.
     RMField regmemIndex;
@@ -75,17 +146,19 @@ struct Disassembly_Operand
     // TODO: Change sign. Unsigned may be better as a default.
     union
     {
-        i16 value;
+        u16 value;
         struct
         {
-            i8 valueLow; // NOTE: 8-bit operand is stored in low byte
-            i8 valueHigh;
+            u8 valueLow; // NOTE: 8-bit operand is stored in low byte
+            u8 valueHigh;
         };
     };
 };
 
-enum Disassembly_InstructionType
+enum InstructionType
 {
+    DIS_NOOP,
+
     // Data transfer
     DIS_MOV,
     DIS_PUSH,
@@ -188,39 +261,37 @@ enum Disassembly_InstructionType
     DIS_LOCK,
     DIS_SEGMENT,
 
-    // NOTE: Always keep this at the end.
-    DIS_NOOP
 };
 
 static const char* operationNames[] = {
-    "mov", "push", "pop", "xchg", "in", "out", "xlat", "lea", "lds", "les", "lahf", "sahf", "pushf", "popf",
-    "add", "adc", "inc", "aaa", "daa", "sub", "sbb", "dec", "neg", "cmp", "aas", "das", "mul", "imul", "aam",
-    "div", "idiv", "aad", "cbw", "cwd", "not", "shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "and", "test",
-    "or", "xor", "rep", "movsb", "movsw", "cmpsb", "cmpsw", "scasb", "scasw", "lodsb", "lodsw", "stosb", "stosw",
-    "call", "jmp", "ret", "je", "jl", "jle", "jb", "jbe", "jp", "jo", "js", "jne", "jnl", "jnle", "jnb", "jnbe",
-    "jnp", "jno", "jns", "loop", "loopz", "loopnz", "jcxz", "int", "into", "iret", "clc", "cmc", "stc", "cld", 
-    "std", "cli", "sti", "hlt", "wait", "esc", "lock", "segment", ";noop"
+    "; NOOP", "mov", "push", "pop", "xchg", "in", "out", "xlat", "lea", "lds", "les", "lahf", "sahf", "pushf",
+    "popf", "add", "adc", "inc", "aaa", "daa", "sub", "sbb", "dec", "neg", "cmp", "aas", "das", "mul", "imul",
+    "aam", "div", "idiv", "aad", "cbw", "cwd", "not", "shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "and",
+    "test", "or", "xor", "rep", "movsb", "movsw", "cmpsb", "cmpsw", "scasb", "scasw", "lodsb", "lodsw", "stosb",
+    "stosw", "call", "jmp", "ret", "je", "jl", "jle", "jb", "jbe", "jp", "jo", "js", "jne", "jnl", "jnle", "jnb",
+    "jnbe", "jnp", "jno", "jns", "loop", "loopz", "loopnz", "jcxz", "int", "into", "iret", "clc", "cmc", "stc",
+    "cld", "std", "cli", "sti", "hlt", "wait", "esc", "lock", "segment"
 };
 
-struct Disassembly_Instruction
+struct Instruction
 {
-    Disassembly_InstructionType type;
+    InstructionType type;
     int operandCount;
 
-    Disassembly_Operand opDest;
-    Disassembly_Operand opSrc;
+    Operand opDest;
+    Operand opSrc;
 
     bool isWide;
 };
 
-Inst_Operand Inst_ParseOperand(u8 byte)
+OperandByte Inst_ParseOperand(u8 byte)
 {
     // Byte structure:
     // - mod: (2 bit) mode 
     // - reg: (3 bit) register
     // - r/m: (3 bit) register/memory
 
-    Inst_Operand result;
+    OperandByte result;
     result.mod = (ModField)((byte >> 6) & 0b11);
     result.reg = (RMField)((byte >> 3) & 0b111);
     result.rm = (RMField)(byte & 0b111);
@@ -228,25 +299,25 @@ Inst_Operand Inst_ParseOperand(u8 byte)
     return result;
 }
 
-Disassembly_Operand InitRegisterOperand(RMField registerIndex)
+Operand InitRegisterOperand(RMField registerIndex)
 {
-    Disassembly_Operand result {0};
+    Operand result {0};
     result.type = OP_REGISTER;
     result.regmemIndex = registerIndex;
     return result;
 }
 
-Disassembly_Operand InitSegmentRegisterOperand(RMField registerIndex)
+Operand InitSegmentRegisterOperand(RMField registerIndex)
 {
-    Disassembly_Operand result {0};
+    Operand result {0};
     result.type = OP_SEGMENT_REGISTER;
     result.regmemIndex = registerIndex;
     return result;
 }
 
-Disassembly_Operand InitImmediateOperand(i16 value)
+Operand InitImmediateOperand(i16 value)
 {
-    Disassembly_Operand result {0};
+    Operand result {0};
     result.type = OP_IMMEDIATE;
     result.value = value;
     return result;
