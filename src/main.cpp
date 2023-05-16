@@ -301,6 +301,17 @@ bool DecodeSingleByteInstruction(u8 opcode, Instruction* instruction)
         case INST_LAHF:  instruction->type = DIS_LAHF; break;
         case INST_LOCK:  instruction->type = DIS_LOCK; break;
 
+        case INST_MOVSB: instruction->type = DIS_MOVSB; break;
+        case INST_MOVSW: instruction->type = DIS_MOVSW; break;
+        case INST_CMPSB: instruction->type = DIS_CMPSB; break;
+        case INST_CMPSW: instruction->type = DIS_CMPSW; break;
+        case INST_SCASB: instruction->type = DIS_SCASB; break;
+        case INST_SCASW: instruction->type = DIS_SCASW; break;
+        case INST_LODSB: instruction->type = DIS_LODSB; break;
+        case INST_LODSW: instruction->type = DIS_LODSW; break;
+        case INST_STOSB: instruction->type = DIS_STOSB; break;
+        case INST_STOSW: instruction->type = DIS_STOSW; break;
+
         case INST_INT3:
             instruction->type = DIS_INT;
             instruction->operandCount = 1;
@@ -425,11 +436,6 @@ int main(int argc, char** argv)
                     LoadMemoryOperand(file, regmem, operand);
                 }
                 else if ((opcode & 0b11111110) == 0b11110010) instruction.type = DIS_REP;
-                else if ((opcode & 0b11111110) == 0b10100100) instruction.type = (opcode & 0b1) ? DIS_MOVSW : DIS_MOVSB;
-                else if ((opcode & 0b11111110) == 0b10100110) instruction.type = (opcode & 0b1) ? DIS_CMPSW : DIS_CMPSB;
-                else if ((opcode & 0b11111110) == 0b10101110) instruction.type = (opcode & 0b1) ? DIS_SCASW : DIS_SCASB;
-                else if ((opcode & 0b11111110) == 0b10101100) instruction.type = (opcode & 0b1) ? DIS_LODSW : DIS_LODSB;
-                else if ((opcode & 0b11111110) == 0b10101010) instruction.type = (opcode & 0b1) ? DIS_STOSW : DIS_STOSB;
                 else if ((opcode & 0b11000100) == 0b00000000)
                 {
                     instruction.isWide = (opcode & 0b1);
